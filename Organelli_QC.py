@@ -7,7 +7,7 @@ import pvlib
 from statsmodels.stats.diagnostic import lilliefors
 def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('nan'),
                    qc_wls: list = [490], step2_r2: object = 0.995, step3_r2: object = 0.998,
-                   skip_meta_tests: object = False, skip_dark_test: object = False) -> object:
+                   skip_meta_tests: object = False, skip_dark_test: object = True) -> object:
     """
     Quality control profile with Organelli et al. 2016
     Test is perfomed at the closest wavelength to `qc_wl`
@@ -56,7 +56,8 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
             # -- Step 0: Pre-checks + Sun Elevation --
             # Check enough observations
             if sum(~rad.isna().astype(bool), 0) < 10:
-                return False, flags, 'TOO_FEW_OBS', False
+                results.append((False, flags, 'BAD: NO RES: TOO_FEW_OBS', False, qc_wl))
+                continue
             if not skip_meta_tests:
                 # Check monotonic profile
                 DEPTH_array = df['DEPTH'].values
@@ -72,7 +73,8 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
 
             # Check Location
             if not (-90 <= lat <= 90 and -180 <= lon <= 360):
-                return False, flags, 'BAD: INVALID_LOCATION', False
+                results.append(( False, flags, 'BAD: NO RES: INVALID_LOCATION', False,qc_wl))
+                continue
                 # Check Sun Elevation
                 # sun_elevation = solar_zenith_and_azimuth_angle(lon, lat, time_utc.to_pydatetime())
                 # if not 2 <= sun_elevation:
@@ -93,7 +95,8 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
 
                 # Check valid number of observations
                 if i < 5:
-                    return False, flags, 'TOO_FEW_OBS_DARK', False
+                    results.append( (False, flags, 'TOO_FEW_OBS_DARK', False,qc_wl))
+                    continue
 
             # -- Step 2: Cloud signal --
             # Check fit quality
@@ -121,10 +124,12 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
             flags[np.argwhere(sel)[valid_indices][res[valid_indices] > 2 * np.std(res[valid_indices])]] = bad
 
             if r2 < step2_r2:
-                return False, flags, 'BAD: CLOUDY_PROFILE', False
+                results.append( (False, flags, 'BAD: CLOUDY_PROFILE', False, qc_wl))
+                continue
              # Check valid number of observations
             if sum(~flags.astype(bool)) < 5:
-                return False, flags, 'BAD: TOO_FEW_OBS_CLOUDY', False
+                results.append(( False, flags, 'BAD: TOO_FEW_OBS_CLOUDY', False,qc_wl))
+                continue
 
             # -- Step 3: Wave focusing --
             # Check fit quality on flagged data
@@ -155,10 +160,12 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
             flags[np.argwhere(sel)[res > 2 * np.std(res)]] = 2
 
             if r2 < step3_r2:
-                return False, flags, 'BAD: WAVE_FOCUSING', False
+                results.append((False, flags, 'BAD: WAVE_FOCUSING', False,qc_wl))
+                continue
 
             if sum(~flags.astype(bool)) < 5:
-                return False, flags, 'BAD: TOO_FEW_OBS_NOTFLAGGED', False
+                results.append(( False, flags, 'BAD: TOO_FEW_OBS_NOTFLAGGED', False, qc_wl))
+                continue
 
             results.append((True, flags, 'GOOD', polynomial_fit, qc_wl))
         except Exception as e:

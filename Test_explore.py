@@ -3,6 +3,7 @@ import os
 import re
 import sys
 
+import random
 import cmocean
 import numpy as np
 import pandas as pd
@@ -180,6 +181,11 @@ def plot_ed_profiles(df, kd_df, wv_target, wv_og, ed0, depth_col='depth'):
 
         # Check if the figure already exists
         if not os.path.exists(figure_path):
+            # Check if all values for this cycle are NaN
+            if kd_df[kd_df['CYCLE'] == cycle][kd_columns].isna().all().all():
+                print(f"All values for cycle {cycle} are NaN. Skipping figure creation.")
+                continue
+
             # If the figure does not exist, generate it
             fig, ax = plt.figure(figsize=(12, 12)), plt.gca()
             ax.set_xticks([])
@@ -192,7 +198,7 @@ def plot_ed_profiles(df, kd_df, wv_target, wv_og, ed0, depth_col='depth'):
             ax.tick_params(axis='both', which='both', length=0)
 
            # Check if the cycle is good or bad
-            flag = kd_df[kd_df['CYCLE'] == cycle]['FLAGS'].values[0][0]
+            flag = kd_df[kd_df['CYCLE'] == cycle]['490_QC_FLAG'].values[0]
             if flag.startswith('GOOD'):
                 status = 'PASSED'
             else:
@@ -209,7 +215,7 @@ def plot_ed_profiles(df, kd_df, wv_target, wv_og, ed0, depth_col='depth'):
 
             # Subplot for Ed(0-) values
             for inner_cycle in df['CYCLE'].unique():
-                if inner_cycle != cycle:
+                if inner_cycle != cycle and kd_df[kd_df['CYCLE'] == inner_cycle]['490_QC_FLAG'].values[0] == 'GOOD' :
                     ax1.plot(wv_og, ed0[ed0['CYCLE'] == inner_cycle][ed0_columns].values[0], color='lightgrey')
                     ax2.plot(wv_og, kd_df[kd_df['CYCLE'] == inner_cycle][kd_columns].values[0], color='lightgrey')
 
@@ -219,12 +225,12 @@ def plot_ed_profiles(df, kd_df, wv_target, wv_og, ed0, depth_col='depth'):
             ax1.set_xlabel('Wavelength (nm)')
             ax1.set_ylabel('Ed(0-) Values')
             ax1.set_title('Hyperspectral Ed(0-)')
-            ax2.set_ylim([0.90 * min(ed0[ed0['CYCLE'] == cycle][ed0_columns].values[0]),
+            ax1.set_ylim([0.90 * min(ed0[ed0['CYCLE'] == cycle][ed0_columns].values[0]),
                           1.05 * max(ed0[ed0['CYCLE'] == cycle][ed0_columns].values[0])])
             ax2.set_xlabel('Wavelength (nm)')
             ax2.set_ylabel('Kd Values')
             ax2.set_title('Hyperspectral Kd')
-            ax2.set_ylim([0.90* min(kd_df[kd_df['CYCLE'] == cycle][kd_columns].values[0]),
+            ax2.set_ylim([0.90 * min(kd_df[kd_df['CYCLE'] == cycle][kd_columns].values[0]),
                           1.05 * max(kd_df[kd_df['CYCLE'] == cycle][kd_columns].values[0])])
 
             # Plot the ED profiles
@@ -232,7 +238,7 @@ def plot_ed_profiles(df, kd_df, wv_target, wv_og, ed0, depth_col='depth'):
 
             for idx, (ed_col, kd_col, ed0_col) in enumerate(
                     zip(closest_columns, closest_kd_columns, closest_0_columns)):
-
+            # Use the specific flag to filter the df DataFrame
                 if idx == 0:
                     ax = ax3
                 elif idx == 1:
@@ -455,30 +461,71 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         wavelengths = [col for col in Ed_profile.columns if isinstance(col, (int, float))]
 
         # Organelli QC
-        [f1, f3, g5, p_fit, qc_wv]  = Organelli_QC.organelli16_qc(Ed_profile, lat=Ed_profile.LAT[0],
-                                                          lon=Ed_profile.LON[0],qc_wls=   [380,400,490,500], step2_r2=0.995, step3_r2=0.998,
+        results = Organelli_QC.organelli16_qc(Ed_profile, lat=Ed_profile.LAT[0],
+                                                          lon=Ed_profile.LON[0],qc_wls=wavelengths , step2_r2=0.995, step3_r2=0.998,
                                                           skip_meta_tests=False, skip_dark_test=True)
 
-        if f1 == False:
-            print(f"Cycle {current_cycle} failed QC for {g5}: Careful proceeding")
-            Ed_profile['FLAGS'] = 2  # Bad flags, don't use
+        # Create an empty DataFrame with wavelengths as columns
+        df_flags = pd.DataFrame(columns= wavelengths)
+        df_results = pd.DataFrame(columns=['global_flag', 'status', 'polynomial_fit', 'wavelength'])
+
+        # Iterate over the results
+        for result in results:
+            # Extract the wavelength and flags
+            global_flag, flags, status, polynomial_fit, wv = result
+
+            # Add the flags to the corresponding column in the DataFrame
+            df_flags[wv] = flags
+            # Add these values as a new row to the DataFrame
+            new_row = pd.DataFrame({
+                'global_flag': [global_flag],
+                'status': [status],
+                'polynomial_fit': [polynomial_fit],
+                'wavelength': [wv]
+            })
+            df_results = pd.concat([df_results, new_row], ignore_index=True)
+
+
+        if 489.0 in df_results['wavelength'].values:
+            status_value = df_results.loc[df_results['wavelength'] == 489.0, 'status'].values[0]
+            if df_results.loc[df_results['wavelength'] == 489.0, 'global_flag'].values[0] == False:
+                print(
+                    f"Cycle {current_cycle} failed QC at 490 for {df_results.loc[df_results['wavelength'] == 489.0, 'status'].values[0]}: Careful proceeding")
+                Ed_profile['FLAGS'] = 2  # Bad flags at  490 , don't use !
+            else:
+                Ed_profile['FLAGS'] = df_flags[489.0]  # Good flags at  490 , use with confidence !
+
         else:
-            Ed_profile['FLAGS'] = f3
+            print("Wavelength 489.0 not QC. Bad profile.")
+            Ed_profile['FLAGS'] = 2  # Bad flags at  490 , don't use !
+            status_value = 'BAD: Could not QC'  # Set a default value or skip the operation
+
+
+        Ed_profile.loc[
+            (Ed_profile['PRE_TILT'] > 5) | (Ed_profile['POST_TILT'] > 5), 'TILT_FLAG'] = 1  # Questionable tilt flags
+         # Calculate the percentage of rows with 'TILT_FLAG' of 1
+        tilt_flag_percentage = (Ed_profile['TILT_FLAG'] == 1).mean()
 
             # Plot the fitted polynomial - OPTIONAL
+        selected_wavelengths = random.sample(list(df_flags.columns), 4)
 
+        fig, axs = plt.subplots(2, 2, figsize=(10, 10))
+
+        for i, ax in enumerate(axs.flatten()):
+            wavelength = selected_wavelengths[i]
             for flag_value, color in zip([0, 1, 2], ['green', 'orange', 'red']):
-                sel = Ed_profile['FLAGS'] == flag_value
-                plt.scatter(Ed_profile[489.0][sel],-Ed_profile['DEPTH'][sel],  label=f'Flag: {flag_value}', color =color)
+                # Select the rows where the flag value matches the current flag_value
+                sel = df_flags[wavelength] == flag_value
+                # Plot the corresponding depth values
+                ax.scatter(Ed_profile[wavelength][sel], -Ed_profile['DEPTH'][sel], label=f'Flag: {flag_value}',
+                           color=color)
+            ax.set_title(f'Wavelength: {wavelength} nm')
+            ax.legend()
 
-            plt.plot(np.exp(p_fit['fitted_values']),- p_fit['depths'], color='black', label='2nd polynomial fit')
-
-            plt.ylabel('Depth (m)')
-            plt.xlabel(' Ed(489)')
-            plt.title(title + ': Organelli QC at 489nm')
-            plt.legend()
-            plt.ylim([ -100 , 0])
-            plt.show()
+        plt.tight_layout()
+        plt.ylabel('Depth (m)')
+        plt.ylim([-100, 0])
+        plt.show()
 
         for col in wavelengths:
             Ed_profile.rename(columns={col: 'ED' + str(col)}, inplace=True)
@@ -488,28 +535,23 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         lu_columns = [col for col in Ed_profile.columns if col.startswith(('ED', 'LU'))]
 
 
-        # Plot hyperspectral Ed to see if has expected shape at all wavelengths (Only if passed QC)
-        #  if f1 == True :
-        #      cmap = plt.get_cmap('viridis')
-        #      normalize = mcolors.Normalize(0,100)
-        #      for N, row in Ed_profile.iterrows():
-        #          if row['FLAGS'] == 0: # Good profiles only
-        #              plt.plot(wavelengths, row[lu_columns],  color = cmap(normalize(Ed_profile['DEPTH'][N])))
-        #     # Add labels and title
-        # plt.xlabel( 'wavelength (nm)')
-        # plt.ylabel('ED Values')
-        # plt.title(title + ': Hyperspectral Ed')
-        # plt.show()
-
         ###### Create Kd document ######
 
-        if f1 == True:
-            flag_idx = Ed_profile['FLAGS'].isin([0, 1])  # Omit rows with flags 2 (BAD)
-        else:
-            flag_idx = Ed_profile['FLAGS'].isin([0, 1, 2])
 
-        new_Ed = Ed_profile.loc[flag_idx, ['TIME', 'DEPTH'] + lu_columns].copy()
+       # flag_idx = df_flags.isin([2])  # Omit rows with flags 2 (BAD)
+
+        new_Ed = Ed_profile.loc[:,['TIME', 'DEPTH'] + lu_columns].copy()
         new_Ed = new_Ed.rename(columns={'TIME': 'datetime', 'DEPTH': 'depth'})
+
+        # Iterate over each wavelength column in new_Ed
+        for wavelength, column in zip(wavelengths, new_Ed.columns):
+            # Check if the wavelength is below 600
+            if wavelength < 650:
+                # Get the flag values for this wavelength
+                flags = df_flags[wavelength]
+                # Replace the values in new_Ed where the flag is 2 with np.nan
+                new_Ed.loc[flags == 2, column] = np.nan
+
 
         # Add to global table of the float
         new_column_names = ["KD" + str(wavelength) for wavelength in wavelengths]
@@ -520,30 +562,37 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         column_mapping = dict(zip(Ed0.columns[6:77], new_column_names))
         Ed0 = Ed0.rename(columns=column_mapping)
 
-        kd_res = Function_KD.fit_klu(new_Ed, fit_method='iterative', wl_interp_method='None', smooth_method='None',
+        kd_res = Function_KD.fit_klu(new_Ed[new_Ed['depth'] < MLD[1]], fit_method='iterative', wl_interp_method='None', smooth_method='None',
                                      only_continuous_obs=False)
-        data_Kd.append({
+
+        # Set 'TILT_FLAG' in data_dict based on the calculated percentage
+        tilt_flag_value = 1 if tilt_flag_percentage > 0.5 else 0
+
+        data_dict_K ={
             'CYCLE': Ed_profile.CYCLE[0],
             'WMO': Ed_profile.WMO[0],
             'TIME': Ed_profile.TIME[0],
             'LON': Ed_profile.LON[0],
             'LAT': Ed_profile.LAT[0],
-            'FLAGS': [g5],
-            **dict(zip(Kd.columns[6: 76], kd_res.Kl.values.reshape(-1).astype(np.float32)))
-        })
+            '490_QC_FLAG': status_value,
+            'TILT_FLAG': tilt_flag_value
+        }
+        data_dict_K.update(dict(zip(Kd.columns[6: 76], kd_res.Kl.values.reshape(-1).astype(np.float32))))
 
-        data_Ed0.append({
+        data_Kd.append(data_dict_K)
+
+        data_dict ={
             'CRUISE': Ed_profile.CRUISE[0],
             'CYCLE': Ed_profile.CYCLE[0],
             'WMO': Ed_profile.WMO[0],
             'TIME': Ed_profile.TIME[0],
             'LON': Ed_profile.LON[0],
             'LAT': Ed_profile.LAT[0],
-            'FLAGS': [g5],
-            **dict(zip(Ed0.columns[6: 76], kd_res.Luf.values.reshape(-1).astype(np.float32)))
-        })
-        # Plot the profile with the Kd values for 4 wavelengths.
-        # plot_ed_profiles(new_Ed, Kd.loc[idx].to_frame().T, [380,490, 700], wavelengths, Ed0.loc[idx].to_frame().T, flag_idx, title, depth_col='depth')
+            '490_QC_FLAG': status_value,
+            'TILT_FLAG': tilt_flag_value
+        }
+        data_dict.update(dict(zip(Ed0.columns[6: 76], kd_res.Luf.values.reshape(-1).astype(np.float32))))
+        data_Ed0.append(data_dict)
 
         # save csv file
         Ed_profile.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_' + current_cycle + '_Ed.csv'), index=False)
@@ -585,7 +634,7 @@ def extracted_wavelengths(Kd, pattern='KD'):
 
 wavelengths = extracted_wavelengths(Kd, pattern='KD')
 
-plot_ed_profiles(Ed_all, Kd, [490, 550, 660], wavelengths, Ed0, depth_col='DEPTH')
+plot_ed_profiles( Ed_all, Kd, [490, 550, 660], wavelengths, Ed0, depth_col='DEPTH')
 
 kd_columns = [col for col in Kd.columns if col.startswith('KD')]
 
