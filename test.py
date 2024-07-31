@@ -37,7 +37,7 @@ logger = logging.getLogger('fit_klu')
             return popt
     # Get data to use for fit
     tic = time()
-    z, lu = df.DEPTH.loc[:idx_end][row_sel], df.LU.loc[:idx_end, col_sel][row_sel]
+    z, lu = df.depth.loc[:idx_end][row_sel], df.LU.loc[:idx_end, col_sel][row_sel]
     # Keep only data above detection limit
     lu_surf = (lu.loc[:, col_sel].iloc[:3].mean()  # Mean surface lu
                .rolling(7, win_type='triang', center=True, min_periods=3).mean())  # Smooth spectra

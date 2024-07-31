@@ -16,7 +16,7 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
 
     :param time_utc: Time of surfacing of float in UTC time zone.
     :param df: Profile data frame, only take profile section (not surface data)
-        requires fields DEPTH and `rad_key`
+        requires fields depth and `rad_key`
     :param sun_elevation: Sun elevation (degrees) = 90 - sun_zenith
     :param lat: Latitude (deg North)
 
@@ -43,7 +43,6 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
     for qc_wl in qc_wls:
 
         try:
-
             good, questionable, bad = 0, 1, 2
             flags = np.zeros(len(df), dtype=int) # Assume all good at beginning.
 
@@ -60,15 +59,15 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
                 continue
             if not skip_meta_tests:
                 # Check monotonic profile
-                DEPTH_array = df['DEPTH'].values
-                if len(np.where(np.diff(DEPTH_array) <= 0)[0]) != 0:
+                depth_array = df['depth'].values
+                if len(np.where(np.diff(depth_array) <= 0)[0]) != 0:
                     # Flag non-monotonic values
-                    flag_noMono = np.where(np.diff(DEPTH_array) <= 0)[0]
+                    flag_noMono = np.where(np.diff(depth_array) <= 0)[0]
                     flags[flag_noMono] = 2  # Bad flag, not monotonous values
 
                     # Ignore non-monotonic rows for the rest of the code
                     rad[flag_noMono] = np.nan
-                    df.loc[flag_noMono,'DEPTH'] = np.nan
+                    df.loc[flag_noMono,'depth'] = np.nan
                     print(f"Non-monotonic values detected at rows {flag_noMono}")
 
             # Check Location
@@ -107,12 +106,12 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
 
             # Remove rows with NaN values
             valid_indices = ~np.isnan(log_rad)
-            DEPTH_valid = df.DEPTH[sel][valid_indices]
+            depth_valid = df.depth[sel][valid_indices]
             log_rad_valid = log_rad[valid_indices]
 
             #  Fit polynomial
-            p = np.polyfit(DEPTH_valid, log_rad_valid, 4)
-            y = np.polyval(p, df.DEPTH[sel])
+            p = np.polyfit(depth_valid, log_rad_valid, 4)
+            y = np.polyval(p, df.depth[sel])
 
             mx = np.ma.masked_array(log_rad, mask=np.isnan(log_rad))
             my = np.ma.masked_array(y, mask=np.isnan(y))
@@ -138,11 +137,11 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
 
             # Remove rows with NaN values
             valid_indices = ~np.isnan(log_rad)
-            DEPTH_valid = df.DEPTH[sel][valid_indices]
+            depth_valid = df.depth[sel][valid_indices]
             log_rad_valid = log_rad[valid_indices]
 
-            p = np.polyfit(DEPTH_valid, log_rad_valid, 4)
-            y = np.polyval(p, df.DEPTH[sel])
+            p = np.polyfit(depth_valid, log_rad_valid, 4)
+            y = np.polyval(p, df.depth[sel])
 
             mx = np.ma.masked_array(log_rad, mask=np.isnan(log_rad))
             my = np.ma.masked_array(y, mask=np.isnan(y))
@@ -151,7 +150,7 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
 
             polynomial_fit = {
                 'coefficients': p,
-                'depths': df.DEPTH[sel],
+                'depths': df.depth[sel],
                 'fitted_values': y}
 
             # Flag individual observations

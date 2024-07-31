@@ -38,37 +38,41 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
     # DETECT_LIMIT = 0.01  # Currently not computing but could be done in the future.
 
     # Init output
-    wavelengths = [float(col[2:]) for col in df.columns if col.startswith(('ED', 'LU'))]
-    result = pd.DataFrame(np.empty((len(wavelengths), 3), dtype=float) * np.nan,
-                          index=wavelengths, columns=['Luf', 'Luf_sd', 'Kl'])
+    wavelengths = [float(col[2:]) for col in df.columns if col.startswith(('ed', 'LU'))]
+    if np.isnan(wavelengths).any():
+        raise ValueError("wavelengths array contains NaN values")
+    # Initialize the result DataFrame with NaN values
+    result = pd.DataFrame(np.full((len(wavelengths), 3), np.nan), columns=['Luf', 'Luf_sd', 'Kl'])
+
     # Remove values where z is above water
-    mask = df['depth'] >= 0
+    mask = df['depth'] >= 0 | np.isnan(df['depth'])
     df = df[mask]
     # Check input once
     if len(df) < MIN_N_TO_FIRST_FIT:
         logger.warning('Not enough points to fit Kl')
         return result
     # Select columns to use
-    col_sel = ~(df.filter(like='ED').isna().all(axis=0) | df.filter(like='LU').isna().all(axis=0))
+    col_sel = ~(df.filter(like='ed').isna().all(axis=0) | df.filter(like='LU').isna().all(axis=0))
     if 1 > sum(col_sel):
         logger.warning('Not enough channels to fit Kl')
         return result
 
-    result.index = result.index.infer_objects()
+    # result.index = result.index.infer_objects()
 
     # Select rows to use
     idx_end = len(df) - 1
     if only_continuous_obs:  # Only high frequency sampling
         idx_end = (df['datetime'].diff(-1).abs() > pd.Timedelta(seconds=20)).idxmax()
     # Select rows based on the condition that none of the values in the selected "LU" columns are NaN
-    lu_columns = [col for col in df.columns if col.startswith(('LU', 'ED'))]
+    lu_columns = [col for col in df.columns if col.startswith(('LU', 'ed'))]
     # Select rows where all values in the LU columns are not NaN
-    row_sel = df[lu_columns].notna().all(axis=1)
+    #  row_sel = df[lu_columns].notna().all(axis=1) doesn't work if using Kd outlier flags from Organelli .
 
-    # Check input twice
-    if sum(row_sel) < 10:
-        logger.warning('Not enough points to fit Kl')
-        return result
+    # # Check input twice
+    # if sum(row_sel) < 10:
+    #     logger.warning('Not enough points to fit Kl')
+    #     return result
+
     # Define helper function
     if fit_method == 'robust':
         def robust_polyfit(x, y):
@@ -80,7 +84,7 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
             return popt
     # Get data to use for fit
     # tic = time()
-    row_sel = ~(df.loc[:idx_end, lu_columns].isnull().any(axis=1))
+    row_sel = ~(df.loc[:idx_end, lu_columns].isnull().all(axis=1))
     z = df.loc[:idx_end, 'depth'][row_sel]
     lu = df.loc[:idx_end, lu_columns][row_sel]
 
@@ -106,7 +110,7 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
 
     # Replace infinite values with NaN
     lu.replace([np.inf, -np.inf], np.nan, inplace=True)
-    lu = lu.dropna()
+  #NOOOO  lu = lu.dropna()
 
     if fit_method == 'robust':  # Robust exponential fit (slow, reference time)
         # Use exp
@@ -132,24 +136,35 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
                                            if sum(~np.isnan(y)) > 10 else np.array([np.nan, np.nan])), axis='index')
         result.loc[wk_sel, 'Luf'] = np.exp(c.iloc[1, :]).to_numpy(float)
         result.loc[wk_sel, 'Kl'] = -c.iloc[0, :].to_numpy(float)
+
+
     elif fit_method == 'iterative':  # Iterative changing penetration depth to which fit data
         lu = lu.apply(pd.to_numeric, errors='coerce')
         lu_log = lu.apply(np.log)
-
         # Compute a first penetration depth using 2nd order polynomial as in Zing et al. 2020
         # TODO Use previous wavelength zpd for first guest (faster and likely smoother result)
         def guess_zpd(z, lu_log):
-            fit = np.polynomial.polynomial.Polynomial.fit(z, lu_log, 2)
-            #  fit = lu_log.apply(lambda y: np.polyfit(z, y, 2), axis='index')
-            c = c = fit.convert().coef
-            # f = np.exp(c[2] * z ** 2 + c[1] * z + c[0])  # Compute fit
+            zpd0_list = []
+            # Filter out NaN values for the current column
+            valid_mask = ~np.isnan(lu_log)
+            z_valid = z[valid_mask]
+            lu_log_valid = lu_log[valid_mask]
+
+            if len(z_valid) < 10:  # Ensure there are enough points to fit
+                print('Not enough points to fit zpd')
+                zpd0 = np.nan
+
+            # Perform polynomial fit
+            fit = np.polynomial.polynomial.Polynomial.fit(z_valid, lu_log_valid, 2)
+            c = fit.convert().coef
+
             # Use quadratic formula to find depth at which Lu(z) = Lu(0)/e
             b24ac = c[1] ** 2 - 4 * c[2]
             if b24ac >= 0:
-                zpd = np.array(((-c[1] + np.sqrt(b24ac)) / (2 * c[2]),
-                                (-c[1] - np.sqrt(b24ac)) / (2 * c[2])))
-                zpd0 = np.min(zpd) if np.all(zpd > 0) else np.max(zpd)
-                if zpd0 < 0:
+                 zpd = np.array(((-c[1] + np.sqrt(b24ac)) / (2 * c[2]),
+                                 (-c[1] - np.sqrt(b24ac)) / (2 * c[2])))
+                 zpd0 = np.min(zpd) if np.all(zpd > 0) else np.max(zpd)
+                 if zpd0 < 0:
                     zpd0 = 10
             else:  # Complex depth... default back to 10 meters
                 zpd0 = 10
@@ -161,14 +176,18 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
         lu_log = lu_log.to_numpy()  # switch to numpy as can't use apply (different iter by wl)
         zpd_history = np.empty(10)
         for wli in range(c.shape[1]):
+            valid_mask = ~np.isnan(lu_log[:, wli])
+            z_valid = z[valid_mask]
+            lu_log_valid = lu_log[valid_mask, wli]
+
             zpd_history[1:] = float('nan')
             zpd_history[0] = zpd[wli]
-            sel = z < zpd[wli]
+            sel = z_valid < zpd[wli]
             if np.sum(sel) < MIN_N_TO_ITER_FIT:
                 # Start with at least 5 points (even if deeper than zpd)
                 sel.iloc[:MIN_N_TO_ITER_FIT] = True
             for i in range(10):
-                c[:, wli] = np.polyfit(z[sel], lu_log[sel, wli], 1)
+                c[:, wli] = np.polyfit(z_valid[sel], lu_log_valid[sel], 1)
                 zpd[wli] = -1 / c[0, wli]  # same as 1 / Ku
                 if zpd[wli] in zpd_history:
                     # Break if new zpd was already computed before (loop)
@@ -179,13 +198,13 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
                     #       and for HyperNav we only use upper 10 meters anyways to compute K
                     zpd[wli] = zpd_history[i - 1]  # reverse to smaller zpd
                     break
-                seln = z < zpd[wli]
+                seln = z_valid < zpd[wli]
                 if (sel != seln).sum() <= 1 or seln.sum() < MIN_N_TO_ITER_FIT:
                     break
                 sel = seln
                 zpd_history[i] = zpd[wli]
             else:
-                logger.debug(f'Lu({lu.columns[wli]:.2f}): Fit max iteration reached (zpd={zpd[wli]:.1f}).')
+                logger.debug(f'Fit max iteration reached (zpd={float(zpd[wli]):.1f}).')
         result.loc[wk_sel, 'Luf'] = np.exp(c[1, :])
         result.loc[wk_sel, 'Kl'] = -c[0, :]
     else:

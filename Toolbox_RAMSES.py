@@ -59,7 +59,7 @@ def ra_single_buoy_mode(x,B0,B1,S,B0_Dark,B1_Dark) :
     
     t = x.Int_Time.iloc[0] # integration time
     offset = x.Dark_count.iloc[0] # dark
-    I = x.iloc[0,4:].to_numpy() # radiance/irradiance
+    I = x.iloc[0,5:].to_numpy() # radiance/irradiance
     
     # Etape 1 : Normalisation
     M = I / 65535
@@ -226,7 +226,7 @@ def format_ramses(filename,metaname,calEd_name,calLu_name,Ed_n_prof,Lu_n_prof,Pi
     
         # Récupération du spectre à la profondeur z
         Ed_z_counts = Ed_raw_profile[Ed_raw_profile.Post_Pres == z]
-        
+
         # Apply ra_single function to translate into physic units   
         Ed_z_physic = ra_single(Ed_z_counts,Ed_B0,Ed_B1,Ed_S,Ed_B0_Dark,Ed_B1_Dark)
         
@@ -254,7 +254,6 @@ def format_ramses(filename,metaname,calEd_name,calLu_name,Ed_n_prof,Lu_n_prof,Pi
         
 
     return Ed_physic_profile, Lu_physic_profile
-
 
 def format_ramses_buoy_mode(filename,cyc,metaname,calEd_name,calLu_name,PixelBinning='auto', PixelStop='auto'):
     """
@@ -364,8 +363,7 @@ def format_ramses_buoy_mode(filename,cyc,metaname,calEd_name,calLu_name,PixelBin
     # Averaging Ed dark coefficient
     Ed_B0_Dark = cal_Ed.B0[ cal_Ed.Wave==-1 ].mean()
     Ed_B1_Dark = cal_Ed.B1[ cal_Ed.Wave==-1 ].mean()
-    Ed_B1_Dark
-    
+
     # Rearange Lu Calibration parameter depending on profile configuration (found in metadata but for now in Edouard files)
     Lu_InWater=True
     
@@ -431,28 +429,131 @@ def format_ramses_buoy_mode(filename,cyc,metaname,calEd_name,calLu_name,PixelBin
     
     return Ed_physic_profile, Lu_physic_profile
 
-
-def recal_pres_ramses(dtb, EdLu):
+def format_ramses_ed_only(filename, metaname, calEd_name, Ed_n_prof, PixelBinning='auto', PixelStop='auto'):
     """
-    Function to recal the pressure sensor of RAMSES
-    using the pressure sensor of the float.
+    Simplified function to obtain a Table of Ed in physics units for ONE profile of a BGC-Argo float.
 
     Parameters
     ----------
-    dtb : pandas.DataFrame
-        Table with the following columns ['CRUISE','CYCLE','WMO','TIME','LON','LAT','PRES_FLOAT','Post_Pres' +wavelengths]
-        containing just one cycle of the float and Ed OR Lu spectra.
-    EdLu : str
-        To indicate if the dtb contains Ed or Lu spectra.
+    filename : str
+        Path of the netcdf file of the float's profile in counts (gdac/aux/coriolis/)
+    metaname : str
+        Path of the netcdf file of the float's metadata (gdac/aux/coriolis/)
+    calEd_name : str
+        Path of the txt file with the calibration coefficient of Ed sensor for this float.
+    Ed_n_prof : int
+        Profile number for Ed data extraction.
+    PixelBinning : int or str
+        Manual override for PixelBinning if necessary. Default='auto'.
+    PixelStop : int or str
+        Manual override for PixelStop if necessary. Default='auto'.
 
     Returns
     -------
-    P_recal : pandas.Series
-        a new vector with the new pressure of the RAMSES sensor recaled
-
+    Ed_physic_profile : pandas.DataFrame
+        Table of Ed values in W.m-2.nm-1 with dimensions: depth x wavelength
     """
 
-    # Distance between the pressure sensor and the Ed/Lu sensors
+    # RAWDATA: Extract data in counts (depth x wavelength), integration time (depth), and dark counts (depth)
+    file = xr.open_dataset(filename)
+    Ed_raw_profile = pd.DataFrame({
+        'Post_Pres': file.RADIOMETER_DOWN_IRR_POST_PRES.sel(N_PROF=Ed_n_prof).values,
+        'Int_Time': file.RADIOMETER_DOWN_IRR_INTEGRATION_TIME.sel(N_PROF=Ed_n_prof).values,
+        'tilt_1id': file.RADIOMETER_DOWN_IRR_PRE_INCLINATION.sel(N_PROF=Ed_n_prof).values,
+        'tilt': file.RADIOMETER_DOWN_IRR_POST_INCLINATION.sel(N_PROF=Ed_n_prof).values,
+        'Dark_count': file.RADIOMETER_DOWN_IRR_DARK_AVERAGE.sel(N_PROF=Ed_n_prof).values
+    })
+    Ed_raw_profile = pd.concat([Ed_raw_profile, pd.DataFrame(file.RAW_DOWNWELLING_IRRADIANCE.sel(N_PROF=Ed_n_prof).values)], axis=1)
+
+    # METADATA: Extract Pixel configuration (PixelStart, PixelStop, and Binning)
+    meta = xr.open_dataset(metaname)
+
+    # Find Config parameters index of RAMSES 1 and 2
+    index_Arc = np.where(
+        meta.LAUNCH_CONFIG_PARAMETER_NAME.values == b'CONFIG_RamsesArcOutputPixelBegin_NUMBER                                                                                         ')[
+        0][0]
+    index_Acc = np.where(
+        meta.LAUNCH_CONFIG_PARAMETER_NAME.values == b'CONFIG_RamsesAccOutputPixelBegin_NUMBER                                                                                         ')[
+        0][0]
+
+    # Find Config parameters thanks to the index
+    [PixelStart_Acc, PixelStop_Acc, PixelBinning_Acc] = meta.LAUNCH_CONFIG_PARAMETER_VALUE.values[
+                                                        index_Acc:index_Acc + 3]
+
+    if PixelBinning != 'auto':
+        PixelBinning_Acc, PixelBinning_Arc = PixelBinning, PixelBinning
+
+    if PixelStop != 'auto':
+        PixelStop_Acc, PixelStop_Arc = PixelStop, PixelStop
+
+    # CALIBRATION FILES: Process calibration coefficients
+    cal_Ed = pd.read_table(calEd_name, sep='\t')
+    cal_Ed.replace("+NAN", np.nan, inplace=True)
+    cal_Ed = cal_Ed.apply(pd.to_numeric, errors='coerce')
+
+    # Rearange Ed Calibration parameter depending on profile configuration (found in metadata but for now in Edouard files)
+    Ed_InWater = True
+    # Ensure PixelStart_Acc, PixelStop_Acc, and PixelBinning_Acc are integers
+    PixelStart_Acc_int = int(PixelStart_Acc)
+    PixelStop_Acc_int = int(PixelStop_Acc)
+    PixelBinning_Acc_int = int(PixelBinning_Acc)
+
+    # Use the integer values with numpy.arange
+    Ed_sq = np.arange(PixelStart_Acc_int, PixelStop_Acc_int, PixelBinning_Acc_int)
+    # Averaging Ed calibrations factor PixelBinningxPixelBinning
+
+    # ajout d'une condition pour éviter les problèmes de shape dans le cas PixelBinning=1
+    if PixelBinning == 1:
+        Ed_sq = np.arange(PixelStart_Acc_int, PixelStop_Acc_int + 1, PixelBinning_Acc_int)
+
+    Ed_wave = pd.array(
+        [np.mean(cal_Ed.Wave[(cal_Ed.N >= Ed_sq[i]) & (cal_Ed.N <= Ed_sq[i] + PixelBinning_Acc_int - 1)]) for i in
+         range(len(Ed_sq))])
+    Ed_B0 = pd.array(
+        [np.mean(cal_Ed.B0[(cal_Ed.N >= Ed_sq[i]) & (cal_Ed.N <= Ed_sq[i] + PixelBinning_Acc_int - 1)]) for i in
+         range(len(Ed_sq))])
+    Ed_B1 = pd.array(
+        [np.mean(cal_Ed.B1[(cal_Ed.N >= Ed_sq[i]) & (cal_Ed.N <= Ed_sq[i] + PixelBinning_Acc_int - 1)]) for i in
+         range(len(Ed_sq))])
+
+    if Ed_InWater:
+        Ed_S = pd.array(
+            [np.mean(cal_Ed.S[(cal_Ed.N >= Ed_sq[i]) & (cal_Ed.N <= Ed_sq[i] + PixelBinning_Acc_int - 1)]) for i in
+             range(len(Ed_sq))])
+    else:
+        Ed_S = pd.array(
+            [np.mean(cal_Ed.Sair[(cal_Ed.N >= Ed_sq[i]) & (cal_Ed.N <= Ed_sq[i] + PixelBinning_Acc_int - 1)]) for i in
+             range(len(Ed_sq))])
+
+    # Averaging Ed dark coefficient
+    Ed_B0_Dark = cal_Ed.B0[cal_Ed.Wave == -1].mean()
+    Ed_B1_Dark = cal_Ed.B1[cal_Ed.Wave == -1].mean()
+
+    # APPLY CALIBRATION: Convert counts to physical units
+    Ed_physic_profile = pd.DataFrame(columns=np.round(Ed_wave))
+    Ed_physic_profile.insert(0, 'Post_Pres', Ed_raw_profile.Post_Pres[~Ed_raw_profile.Post_Pres.isna()])
+    Ed_physic_profile.insert(0, 'tilt', Ed_raw_profile.tilt[~Ed_raw_profile.tilt.isna()])
+    Ed_physic_profile.insert(0, 'tilt_1id', Ed_raw_profile.tilt_1id[~Ed_raw_profile.tilt_1id.isna()])
+
+    # Fill the table with counts data converted
+    for z in Ed_raw_profile.Post_Pres[~Ed_raw_profile.Post_Pres.isna()]:
+        # Récupération du spectre à la profondeur z
+        Ed_z_counts = Ed_raw_profile[Ed_raw_profile.Post_Pres == z]
+        # Ed_z_counts = pd.Series([
+        #     np.mean(Ed_z_counts[(Ed_z_counts.N >= Ed_sq[i]) & (Ed_z_counts.N <= Ed_sq[i] + PixelBinning_Acc - 1)])
+        #     for i in range(len(Ed_sq))
+        # ])
+
+        # Apply ra_single function to translate into physic units
+        Ed_z_physic = ra_single_buoy_mode(Ed_z_counts, Ed_B0, Ed_B1, Ed_S, Ed_B0_Dark, Ed_B1_Dark)
+
+        # Add into the global table
+        Ed_physic_profile.loc[Ed_physic_profile.Post_Pres == z, Ed_physic_profile.columns[3:]] = Ed_z_physic.reshape(
+            (1, -1))
+    return Ed_physic_profile
+
+def recal_pres_ramses(dtb, EdLu):
+        # Distance between the pressure sensor and the Ed/Lu sensors
     delta_Ed = -0.17 # 17cm d'écart
     delta_Lu = 1.78 # 178cm d'écart
    

@@ -574,7 +574,7 @@ def soundspeed(S, T, D, equation="mackenzie"):
     """
     Various sound-speed equations.
     1)  soundspeed(s, t, d) returns the sound speed (m/sec) given vectors
-       of salinity (ppt), temperature (deg C) and DEPTH (m) using
+       of salinity (ppt), temperature (deg C) and depth (m) using
        the formula of Mackenzie:  Mackenzie, K.V. "Nine-term Equation for
        Sound Speed in the Oceans", J. Acoust. Soc. Am. 70 (1981), 807-812.
 
