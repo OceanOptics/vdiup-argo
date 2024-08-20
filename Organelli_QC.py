@@ -6,73 +6,77 @@ import unittest
 import pvlib
 from statsmodels.stats.diagnostic import lilliefors
 def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('nan'),
-                   qc_wls: list = [490], step2_r2: object = 0.995, step3_r2: object = 0.998,
+                   qc_wls: list = [490], step2_r2: object = 0.995, step3_r2: object = 0.997,step3_r3:object = 0.999,
                    skip_meta_tests: object = False, skip_dark_test: object = True) -> object:
     """
     Quality control profile with Organelli et al. 2016
-    Test is perfomed at the closest wavelength to `qc_wl`
 
-    QC of location and sun_elevation is skipped if arguments sun_elevation, lat, and lon are None.
-
-    :param time_utc: Time of surfacing of float in UTC time zone.
     :param df: Profile data frame, only take profile section (not surface data)
         requires fields depth and `rad_key`
-    :param sun_elevation: Sun elevation (degrees) = 90 - sun_zenith
     :param lat: Latitude (deg North)
-
     :param lon: Longitude (deg East)
-    :param rad_key: Key to use in data frame for radiometric parameter to evaluate (e.g. LU, ES)
-    :param qc_wl: Wavelength at which test is performed (nm)
     :param step2_r2: Squared Correlation coefficient for first test (default=0.995)
     :param step3_r2: Squared Correlation coefficient for second test (default=0.998)
     :param skip_meta_tests: Skip metadata test (boolean)
     :param skip_dark_test: Skip dark test (boolean)
-    :return: (global_flag, local_flag, status,polynomial_fit)
-        global_flag: True or False: passed or failed QC
+    :return: (global_flag, local_flag, status,polynomial_fit, wavelength)
+        global_flag: 0,1,2: Overall profile QC for given wavelength
         local_flag: flag for each observation
             0. good: does not require modification to be used
-            2. questionable: potentially usable
-            3. bad: need adjustment before use
+            1. questionable: potentially usable
+            2. bad: need adjustment before use
         polynomial_fit: dictionary with polynomial fit information
         status: step at which failed QC
+        wavelength: wavelength at which QC was performed
     """
 
     results = []
-
+    # Filter the DataFrame to include only the upper 250 meters following Organelli
 
     for qc_wl in qc_wls:
-
         try:
+            if qc_wl > 600:
+                closest_to_zero = df.loc[df['depth'].idxmin()]
+                threshold_value = 0.01 * closest_to_zero[qc_wl]
+                associated_depth = 2 * df[df[qc_wl] <= threshold_value]['depth'].max()
+
+                df_filtered = df[df['depth'] <= associated_depth]
+
+            else:
+                df_filtered = df[df['depth'] <= 250]
+            
             good, questionable, bad = 0, 1, 2
-            flags = np.zeros(len(df), dtype=int) # Assume all good at beginning.
+            flags = np.zeros(len(df_filtered), dtype=int) # Assume all good at beginning.
 
             # Extract wavelength to format for Kd function and rename columns
-            wl = [col for col in df.columns if isinstance(col, (int, float))]
+            wl = [col for col in  df_filtered.columns if isinstance(col, (int, float))]
             wl_int = [int(w) for w in wl]
             wli = wl_int[np.argmin(abs(np.array(wl_int) - qc_wl))]
-            rad = df[wli]
+            rad = df_filtered[wli]
 
             # -- Step 0: Pre-checks + Sun Elevation --
             # Check enough observations
             if sum(~rad.isna().astype(bool), 0) < 10:
-                results.append((False, flags, 'BAD: NO RES: TOO_FEW_OBS', False, qc_wl))
+                flags[:] = bad
+                results.append((2, flags, 'BAD: NO RES: TOO_FEW_OBS', False, qc_wl))
                 continue
             if not skip_meta_tests:
                 # Check monotonic profile
-                depth_array = df['depth'].values
+                depth_array = df_filtered['depth'].values
                 if len(np.where(np.diff(depth_array) <= 0)[0]) != 0:
                     # Flag non-monotonic values
                     flag_noMono = np.where(np.diff(depth_array) <= 0)[0]
-                    flags[flag_noMono] = 2  # Bad flag, not monotonous values
+                    flags[flag_noMono] = bad  # Bad flag, not monotonous values
 
                     # Ignore non-monotonic rows for the rest of the code
                     rad[flag_noMono] = np.nan
-                    df.loc[flag_noMono,'depth'] = np.nan
+                    df_filtered.loc[flag_noMono,'depth'] = np.nan
                     print(f"Non-monotonic values detected at rows {flag_noMono}")
 
             # Check Location
             if not (-90 <= lat <= 90 and -180 <= lon <= 360):
-                results.append(( False, flags, 'BAD: NO RES: INVALID_LOCATION', False,qc_wl))
+                flags[:] = bad
+                results.append((2, flags, 'BAD: NO RES: INVALID_LOCATION', False,qc_wl))
                 continue
                 # Check Sun Elevation
                 # sun_elevation = solar_zenith_and_azimuth_angle(lon, lat, time_utc.to_pydatetime())
@@ -84,7 +88,7 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
                 # Find dark section of profile
                 i, converged = 0, True
                 while lilliefors(pd.DataFrame(rad, dtype=float).iloc[i:])[1] < 0.01:
-                    if len(df) - i < 10:
+                    if len(df_filtered) - i < 10:
                         converged = False
                         break
                     i += 1  # Start deeper
@@ -94,7 +98,8 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
 
                 # Check valid number of observations
                 if i < 5:
-                    results.append( (False, flags, 'TOO_FEW_OBS_DARK', False,qc_wl))
+                    flags[:] = bad
+                    results.append( (2, flags, 'TOO_FEW_OBS_DARK', False,qc_wl))
                     continue
 
             # -- Step 2: Cloud signal --
@@ -106,14 +111,14 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
 
             # Remove rows with NaN values
             valid_indices = ~np.isnan(log_rad)
-            depth_valid = df.depth[sel][valid_indices]
+            depth_valid = df_filtered.depth[sel][valid_indices]
             log_rad_valid = log_rad[valid_indices]
 
             #  Fit polynomial
             p = np.polyfit(depth_valid, log_rad_valid, 4)
-            y = np.polyval(p, df.depth[sel])
+            y = np.polyval(p, df_filtered.depth[sel])
 
-            mx = np.ma.masked_array(log_rad, mask=np.isnan(log_rad))
+            mx = np.ma.masked_array(log_rad_valid, mask=np.isnan(log_rad_valid))
             my = np.ma.masked_array(y, mask=np.isnan(y))
             # Compute correlation coefficient
             r2 = np.ma.corrcoef(mx.flatten(), my)[0, 1] ** 2
@@ -123,11 +128,13 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
             flags[np.argwhere(sel)[valid_indices][res[valid_indices] > 2 * np.std(res[valid_indices])]] = bad
 
             if r2 < step2_r2:
-                results.append( (False, flags, 'BAD: CLOUDY_PROFILE', False, qc_wl))
+                flags[:] = bad
+                results.append( (2, flags, 'BAD: CLOUDY_PROFILE', False, qc_wl))
                 continue
              # Check valid number of observations
             if sum(~flags.astype(bool)) < 5:
-                results.append(( False, flags, 'BAD: TOO_FEW_OBS_CLOUDY', False,qc_wl))
+                flags[:] = bad
+                results.append((2, flags, 'BAD: TOO_FEW_OBS_CLOUDY', False,qc_wl))
                 continue
 
             # -- Step 3: Wave focusing --
@@ -137,11 +144,11 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
 
             # Remove rows with NaN values
             valid_indices = ~np.isnan(log_rad)
-            depth_valid = df.depth[sel][valid_indices]
+            depth_valid = df_filtered.depth[sel][valid_indices]
             log_rad_valid = log_rad[valid_indices]
 
             p = np.polyfit(depth_valid, log_rad_valid, 4)
-            y = np.polyval(p, df.depth[sel])
+            y = np.polyval(p, df_filtered.depth[sel])
 
             mx = np.ma.masked_array(log_rad, mask=np.isnan(log_rad))
             my = np.ma.masked_array(y, mask=np.isnan(y))
@@ -150,23 +157,31 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
 
             polynomial_fit = {
                 'coefficients': p,
-                'depths': df.depth[sel],
+                'depths': df_filtered.depth[sel],
                 'fitted_values': y}
 
             # Flag individual observations
             res = np.abs(log_rad - y)
-            flags[np.argwhere(sel)[res > 1 * np.std(res)]] = 1
-            flags[np.argwhere(sel)[res > 2 * np.std(res)]] = 2
 
             if r2 < step3_r2:
-                results.append((False, flags, 'BAD: WAVE_FOCUSING', False,qc_wl))
+                flags[:] = bad
+                results.append((2, flags, 'BAD: WAVE_FOCUSING', False, qc_wl))
                 continue
 
             if sum(~flags.astype(bool)) < 5:
-                results.append(( False, flags, 'BAD: TOO_FEW_OBS_NOTFLAGGED', False, qc_wl))
+                flags[:] = bad
+                results.append(( 2, flags, 'BAD: TOO_FEW_OBS_NOTFLAGGED', False, qc_wl))
                 continue
 
-            results.append((True, flags, 'GOOD', polynomial_fit, qc_wl))
+            if r2 > step3_r2 < step3_r3:
+                flags[flags == 0] = questionable
+                flags[np.argwhere(sel)[res > 2 * np.std(res)]] = bad
+                results.append((1, flags, 'QUESTIONABLE', polynomial_fit, qc_wl))
+                continue
+
+            flags[np.argwhere(sel)[res > 1 * np.std(res)]] = questionable
+            flags[np.argwhere(sel)[res > 2 * np.std(res)]] = bad
+            results.append((0, flags, 'GOOD', polynomial_fit, qc_wl))
         except Exception as e:
             print(f"An error occurred while processing wavelength {qc_wl}: {e}")
             continue

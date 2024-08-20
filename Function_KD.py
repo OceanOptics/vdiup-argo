@@ -53,9 +53,13 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
         return result
     # Select columns to use
     col_sel = ~(df.filter(like='ed').isna().all(axis=0) | df.filter(like='LU').isna().all(axis=0))
+    wk_sel = col_sel
     if 1 > sum(col_sel):
         logger.warning('Not enough channels to fit Kl')
         return result
+
+    result = result.reindex(col_sel.index)
+
 
     # result.index = result.index.infer_objects()
 
@@ -96,11 +100,8 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
     # Get Lu for values below detection limit
     # Kd tend to 0 but is set to NaN and must be handled properly later on
     # adl_sel.index = col_sel.index
-    wk_sel = col_sel  # f& adl_sel
-    lu = lu.loc[:, wk_sel].astype(float)  # Makes copy to 64bit (typically in 32bit) Require copy as edit data in
-    # next step...
+    lu = lu.loc[:, col_sel].astype(float)  # Makes copy to 64bit (typically in 32bit) Require copy as edit data in
 
-    wk_sel.index = result.index
     # Replace 0 by minimum value from instrument to prevent log to blow to infinity and replace negative value with 0
     lu[lu <= 0] = 1e-6
     # with warnings.catch_warnings():
@@ -142,43 +143,49 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
         lu = lu.apply(pd.to_numeric, errors='coerce')
         lu_log = lu.apply(np.log)
         # Compute a first penetration depth using 2nd order polynomial as in Zing et al. 2020
-        # TODO Use previous wavelength zpd for first guest (faster and likely smoother result)
         def guess_zpd(z, lu_log):
-            zpd0_list = []
             # Filter out NaN values for the current column
             valid_mask = ~np.isnan(lu_log)
             z_valid = z[valid_mask]
             lu_log_valid = lu_log[valid_mask]
 
-            if len(z_valid) < 10:  # Ensure there are enough points to fit
-                print('Not enough points to fit zpd')
+            if len(z_valid) < 10 or len(lu_log_valid) < 10:  # Ensure there are enough points to fit
+                #print('Not enough points to fit zpd')
                 zpd0 = np.nan
 
             # Perform polynomial fit
-            fit = np.polynomial.polynomial.Polynomial.fit(z_valid, lu_log_valid, 2)
-            c = fit.convert().coef
+            try:
+                fit = np.polynomial.polynomial.Polynomial.fit(z_valid, lu_log_valid, 2)
+                c = fit.convert().coef
+            except np.linalg.LinAlgError:
+                # Handle the case where the polynomial fitting fails
+                print("Polynomial fitting failed due to SVD not converging.")
+                zpd0 = np.nan
 
-            # Use quadratic formula to find depth at which Lu(z) = Lu(0)/e
-            b24ac = c[1] ** 2 - 4 * c[2]
-            if b24ac >= 0:
-                 zpd = np.array(((-c[1] + np.sqrt(b24ac)) / (2 * c[2]),
-                                 (-c[1] - np.sqrt(b24ac)) / (2 * c[2])))
-                 zpd0 = np.min(zpd) if np.all(zpd > 0) else np.max(zpd)
-                 if zpd0 < 0:
-                    zpd0 = 10
-            else:  # Complex depth... default back to 10 meters
-                zpd0 = 10
+            if len(c) < 3:
+                print("The polynomial fit did not return the expected number of coefficients.")
+                zpd0 = np.nan
+            else:
+                # Use quadratic formula to find depth at which Lu(z) = Lu(0)/e
+                b24ac = c[1] ** 2 - 4 * c[2]
+                if b24ac >= 0:
+                     zpd = np.array(((-c[1] + np.sqrt(b24ac)) / (2 * c[2]),
+                                     (-c[1] - np.sqrt(b24ac)) / (2 * c[2])))
+                     zpd0 = np.min(zpd) if np.all(zpd > 0) else np.max(zpd)
+                     if zpd0 < 0:
+                        zpd0 = np.nan
+                else:  # Complex depth... default back to nan
+                    zpd0 = np.nan
             return zpd0
 
         zpd = lu_log.apply(lambda y: guess_zpd(z, y), axis='index').to_numpy()
         # Iterate to find static zpd
         c = np.empty((2, len(lu.columns)), dtype=float)
-        lu_log = lu_log.to_numpy()  # switch to numpy as can't use apply (different iter by wl)
         zpd_history = np.empty(10)
         for wli in range(c.shape[1]):
-            valid_mask = ~np.isnan(lu_log[:, wli])
+            valid_mask = ~np.isnan(lu_log.iloc[:, wli])
             z_valid = z[valid_mask]
-            lu_log_valid = lu_log[valid_mask, wli]
+            lu_log_valid = lu_log[valid_mask].iloc[:,wli]
 
             zpd_history[1:] = float('nan')
             zpd_history[0] = zpd[wli]
@@ -188,7 +195,10 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
                 sel.iloc[:MIN_N_TO_ITER_FIT] = True
             for i in range(10):
                 c[:, wli] = np.polyfit(z_valid[sel], lu_log_valid[sel], 1)
-                zpd[wli] = -1 / c[0, wli]  # same as 1 / Ku
+                if c[0, wli] == 0:
+                    zpd[wli] = np.nan  # Zpd cannot be computed.
+                else:
+                    zpd[wli] = -1 / c[0, wli]
                 if zpd[wli] in zpd_history:
                     # Break if new zpd was already computed before (loop)
                     break
@@ -246,8 +256,8 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
     lu_modeled = result.loc[wk_sel, 'Luf'].to_numpy() * np.exp(
         -np.outer(z, result.loc[wk_sel, 'Kl'].to_numpy()))
     t = np.std(lu - lu_modeled, axis=0)
-    t.index = result.index
-    result['Luf_sd'] = t
+    # Assign the computed standard deviation to the result DataFrame
+    result.loc[wk_sel,'Luf_sd'] = pd.Series(t)
 
     # logger.debug(f"Kl fit in {time() - tic:.3f} seconds")
     return result

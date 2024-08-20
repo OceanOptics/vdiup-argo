@@ -1,8 +1,12 @@
 import pandas as pd
 import numpy as np
+import re
+import pandas as pd
+import numpy as np
+import os
 
-
-def format_to_seabass(data, metadata, filename, missing_value_placeholder='-9999', delimiter='comma'):
+def format_to_seabass(data, metadata, filename, path, comments=None, missing_value_placeholder='-9999',
+                      delimiter='comma'):
     """
     Formats the data and metadata into NASA SeaBASS format and writes to a .sb file.
 
@@ -10,12 +14,15 @@ def format_to_seabass(data, metadata, filename, missing_value_placeholder='-9999
     - data (pd.DataFrame): The dataset to be formatted.
     - metadata (dict): A dictionary containing metadata information.
     - filename (str): The output file name without extension.
+    - path (str): The path where the file will be saved.
+    - comments (list, optional): A list of comments to include in the file.
     - missing_value_placeholder (str): The placeholder for missing values.
     - delimiter (str): The delimiter to use ('comma', 'tab', or 'space').
     """
     # Ensure the filename has the correct extension
     if not filename.endswith('.sb'):
         filename += '.sb'
+    metadata['data_file_name'] = filename
 
     # Handle missing values in datetime columns separately
     datetime_cols = data.select_dtypes(include=[np.datetime64]).columns
@@ -23,7 +30,15 @@ def format_to_seabass(data, metadata, filename, missing_value_placeholder='-9999
 
     # Replace missing values in other columns with '-9999'
     other_cols = data.columns.difference(datetime_cols)
-    data[other_cols] = data[other_cols].fillna(missing_value_placeholder)
+    data[other_cols] = data[other_cols].fillna(missing_value_placeholder).infer_objects(copy=False)
+
+    # Ensure comments is a list
+    if comments is None:
+        comments = []
+    elif isinstance(comments, str):
+        comments = [comments]
+    else:
+        comments = comments.copy()  # Create a local copy of the comments list
 
     # Determine the delimiter
     if delimiter == 'comma':
@@ -35,7 +50,24 @@ def format_to_seabass(data, metadata, filename, missing_value_placeholder='-9999
     else:
         raise ValueError("Unsupported delimiter. Choose from 'comma', 'tab', or 'space'.")
 
-    with open(filename, 'w') as f:
+    if '_Ed' in filename:
+        match = re.search(r'_(\d{3})_', filename)
+        if match:
+            cycle = match.group(1)
+            metadata['profile'] = cycle
+            metadata['id_fields_definitions'] = '1id:pre-tilt, 2id:post-tilt'
+            comments.append(
+                'tilt_1id= pre-tilt, i.e. tilt of the instrument just before performing performing a radiometric measurement')
+            comments.append('tilt = post-tilt, i.e. tilt of the instrument just after performing a radiometric measurement.')
+            metadata.pop('measurement_depth', None)
+
+    elif '_Kd' in filename:
+        metadata['measurement_depth'] = 0
+        metadata.pop('profile', None)
+
+    # Write the data and metadata to a .sb file
+    file_path = os.path.join(path, filename)
+    with open(file_path, 'w') as f:
         # Write header information
         f.write('/begin_header\n')
         for key, value in metadata.items():
@@ -47,10 +79,10 @@ def format_to_seabass(data, metadata, filename, missing_value_placeholder='-9999
         f.write(f'/delimiter={delimiter}\n')
 
         # Write calculated metadata (dates, times, locations)
-        start_date = data['TIME'].min()[:10].replace('-', '')
-        end_date = data['TIME'].max()[:10].replace('-', '')
-        start_time = data['TIME'].min()[11:19]
-        end_time = data['TIME'].max()[11:19]
+        start_date = data['date'].min()
+        end_date = data['date'].max()
+        start_time = data['time'].min()
+        end_time = data['time'].max()
         north_latitude = data['lat'].max()
         south_latitude = data['lat'].min()
         east_longitude = data['lon'].max()
@@ -64,29 +96,51 @@ def format_to_seabass(data, metadata, filename, missing_value_placeholder='-9999
         f.write(f'/south_latitude={south_latitude}[DEG]\n')
         f.write(f'/east_longitude={east_longitude}[DEG]\n')
         f.write(f'/west_longitude={west_longitude}[DEG]\n')
+
+        if comments:
+            f.write('!\n! COMMENTS\n')
+            for comment in comments:
+                f.write(f'! {comment}\n')
+
+        if '_Ed' in filename:
+            data = data.drop(columns=['lat', 'lon'])
+
+        # Define units for each type of data
+        units_dict = {
+            'station': 'none',
+            'date': 'yyyymmdd',
+            'depth': 'm',
+            'wt': 'degreesC',
+            'sal': 'psu',
+            'tilt': 'degrees',
+            'time': 'hh:mm:ss',
+            'lat': 'degrees',
+            'lon': 'degrees',
+            'quality': 'none',
+            'kd': '1/m',
+            'ed': 'uW/cm^2/nm',
+            'Epar': 'uE/cm^2/s',
+        }
+
+        units_list = []
+        for col in data.columns:
+            if any(key in col for key in ['quality', 'kd', 'ed', 'Epar', 'depth', 'wt', 'sal', 'tilt']):
+                for key, unit in units_dict.items():
+                    if key in col:
+                        units_list.append(unit)
+                        break
+            else:
+                units_list.append(units_dict.get(col, 'none'))
+
+        # Convert column names and units list to strings
+        fields_str = ','.join(map(str, data.columns))
+        units_str = ','.join(map(str, units_list))
+
+        # Write fields (column names) and units
+        f.write(f"/fields={fields_str}\n")
+        f.write(f"/units={units_str}\n")
+
         f.write('/end_header\n')
 
-        # Write column names
-        f.write(delim.join(data.columns) + '\n')
-
-        # Write data rows
-        data.to_csv(f, sep=delim, index=False, header=False)
-
-# Define metadata for the SeaBASS file
-metadata = {
-    'investigators': 'Nils_Haentjens, Charlotte_Begouen_Demeaux',
-    'affiliations': 'University_of_Maine, University_of_Maine',
-    'contact': 'nils.haentjens@maine.edu',
-    'experiment': 'PVST-VDIUP',
-    'cruise': 'BGC_' +'wmo',
-    'platform_id': 'wmo',
-    'instrument_manufacturer': 'TriOS',
-    'instrument_model': 'Ramses',
-    'profile': 'cycle_number',
-    'documents': 'none',
-    'calibration_files': 'none',
-    'data_type': 'Drifter',
-    'data_status': 'preliminary',
-    'water_depth': 'NA',
-    'measurement_depth': 'NA',
-}
+    # Write data rows without trailing blank lines
+    data.to_csv(file_path, sep=delim, index=False, header=False, mode='a')

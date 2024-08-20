@@ -550,6 +550,7 @@ def format_ramses_ed_only(filename, metaname, calEd_name, Ed_n_prof, PixelBinnin
         # Add into the global table
         Ed_physic_profile.loc[Ed_physic_profile.Post_Pres == z, Ed_physic_profile.columns[3:]] = Ed_z_physic.reshape(
             (1, -1))
+    Ed_physic_profile = Ed_physic_profile.drop('Post_Pres', axis=1) # remove the Post_Pres column as the values are wrong
     return Ed_physic_profile
 
 def recal_pres_ramses(dtb, EdLu):
