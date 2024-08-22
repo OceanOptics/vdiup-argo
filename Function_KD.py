@@ -36,6 +36,7 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
     MIN_N_TO_FIRST_FIT = 10
     MIN_N_TO_ITER_FIT = 5
     # DETECT_LIMIT = 0.01  # Currently not computing but could be done in the future.
+    df = df.sort_values(by='depth', ascending=True)
 
     # Init output
     wavelengths = [float(col[2:]) for col in df.columns if col.startswith(('ed', 'LU'))]
@@ -59,23 +60,14 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
         return result
 
     result = result.reindex(col_sel.index)
-
-
-    # result.index = result.index.infer_objects()
-
-    # Select rows to use
     idx_end = len(df) - 1
+
     if only_continuous_obs:  # Only high frequency sampling
         idx_end = (df['datetime'].diff(-1).abs() > pd.Timedelta(seconds=20)).idxmax()
+
+
     # Select rows based on the condition that none of the values in the selected "LU" columns are NaN
     lu_columns = [col for col in df.columns if col.startswith(('LU', 'ed'))]
-    # Select rows where all values in the LU columns are not NaN
-    #  row_sel = df[lu_columns].notna().all(axis=1) doesn't work if using Kd outlier flags from Organelli .
-
-    # # Check input twice
-    # if sum(row_sel) < 10:
-    #     logger.warning('Not enough points to fit Kl')
-    #     return result
 
     # Define helper function
     if fit_method == 'robust':
@@ -93,25 +85,12 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
     lu = df.loc[:idx_end, lu_columns][row_sel]
 
     # Keep only data above detection limit
-    #lu_surf = (lu.loc[:, col_sel].iloc[:3].mean()  # Mean surface lu
-    #           .rolling(7, win_type='triang', center=True, min_periods=3).mean())  # Smooth spectra
-    # adl_sel = lu_surf > DETECT_LIMIT
-    # result.loc[col_sel & ~adl_sel, 'Luf'] = lu.loc[:, col_sel & ~adl_sel].iloc[:3].mean()
-    # Get Lu for values below detection limit
-    # Kd tend to 0 but is set to NaN and must be handled properly later on
-    # adl_sel.index = col_sel.index
     lu = lu.loc[:, col_sel].astype(float)  # Makes copy to 64bit (typically in 32bit) Require copy as edit data in
-
     # Replace 0 by minimum value from instrument to prevent log to blow to infinity and replace negative value with 0
     lu[lu <= 0] = 1e-6
-    # with warnings.catch_warnings():
-    #     warnings.filterwarnings('ignore', 'divide by zero encountered in log')
-    #     warnings.filterwarnings('ignore', 'overflow encountered in square')
-    # Fit
-
     # Replace infinite values with NaN
     lu.replace([np.inf, -np.inf], np.nan, inplace=True)
-  #NOOOO  lu = lu.dropna()
+
 
     if fit_method == 'robust':  # Robust exponential fit (slow, reference time)
         # Use exp
@@ -138,7 +117,6 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
         result.loc[wk_sel, 'Luf'] = np.exp(c.iloc[1, :]).to_numpy(float)
         result.loc[wk_sel, 'Kl'] = -c.iloc[0, :].to_numpy(float)
 
-
     elif fit_method == 'iterative':  # Iterative changing penetration depth to which fit data
         lu = lu.apply(pd.to_numeric, errors='coerce')
         lu_log = lu.apply(np.log)
@@ -152,6 +130,7 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
             if len(z_valid) < 10 or len(lu_log_valid) < 10:  # Ensure there are enough points to fit
                 #print('Not enough points to fit zpd')
                 zpd0 = np.nan
+                return zpd0
 
             # Perform polynomial fit
             try:
@@ -161,6 +140,7 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
                 # Handle the case where the polynomial fitting fails
                 print("Polynomial fitting failed due to SVD not converging.")
                 zpd0 = np.nan
+                return zpd0
 
             if len(c) < 3:
                 print("The polynomial fit did not return the expected number of coefficients.")
@@ -180,13 +160,14 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
 
         zpd = lu_log.apply(lambda y: guess_zpd(z, y), axis='index').to_numpy()
         # Iterate to find static zpd
-        c = np.empty((2, len(lu.columns)), dtype=float)
+        c = np.full((2, len(lu.columns)), np.nan)
         zpd_history = np.empty(10)
         for wli in range(c.shape[1]):
             valid_mask = ~np.isnan(lu_log.iloc[:, wli])
             z_valid = z[valid_mask]
             lu_log_valid = lu_log[valid_mask].iloc[:,wli]
-
+            if len(z_valid) < 10 or len(lu_log_valid) < 10 :
+                continue
             zpd_history[1:] = float('nan')
             zpd_history[0] = zpd[wli]
             sel = z_valid < zpd[wli]
@@ -226,7 +207,7 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
     for k in ('Luf', 'Kl'):
         sel = ~np.isfinite(result[k]) & wk_sel  # channels to interpolate
         nsel = np.isfinite(result[k]) & wk_sel  # channels to use
-        if sum(sel) > 10 and k == 'Kl':
+        if sum(sel) > 10 and k == 'Kl' and wl_interp_method !=  'None' :
             logger.warning('High number of fit failed')
         if sum(sel) == 0:  # No need to interpolate
             continue
@@ -238,6 +219,7 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
             result.loc[sel, k] = interp1d(wavelengths[nsel], result[k][nsel], copy=False,
                                           assume_sorted=True,
                                           kind=wl_interp_method)(wavelengths[sel])
+
     # Smooth Spectra
     if smooth_method == 'median':
         result.Luf = result.Luf.rolling(3, center=True, min_periods=2).median()  # Median on square window

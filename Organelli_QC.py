@@ -38,12 +38,13 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
             if qc_wl > 600:
                 closest_to_zero = df.loc[df['depth'].idxmin()]
                 threshold_value = 0.01 * closest_to_zero[qc_wl]
-                associated_depth = 2 * df[df[qc_wl] <= threshold_value]['depth'].max()
+                associated_depth = 2 * df[df[qc_wl] >=  threshold_value]['depth'].max()
 
                 df_filtered = df[df['depth'] <= associated_depth]
+                step2_r2 = 0.95
 
             else:
-                df_filtered = df[df['depth'] <= 250]
+                df_filtered = df[df['depth'] <= 150]
             
             good, questionable, bad = 0, 1, 2
             flags = np.zeros(len(df_filtered), dtype=int) # Assume all good at beginning.
@@ -173,7 +174,7 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
                 results.append(( 2, flags, 'BAD: TOO_FEW_OBS_NOTFLAGGED', False, qc_wl))
                 continue
 
-            if r2 > step3_r2 < step3_r3:
+            if step3_r2 < r2 < step3_r3:
                 flags[flags == 0] = questionable
                 flags[np.argwhere(sel)[res > 2 * np.std(res)]] = bad
                 results.append((1, flags, 'QUESTIONABLE', polynomial_fit, qc_wl))

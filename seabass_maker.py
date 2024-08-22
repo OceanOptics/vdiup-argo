@@ -30,7 +30,9 @@ def format_to_seabass(data, metadata, filename, path, comments=None, missing_val
 
     # Replace missing values in other columns with '-9999'
     other_cols = data.columns.difference(datetime_cols)
-    data[other_cols] = data[other_cols].fillna(missing_value_placeholder).infer_objects(copy=False)
+    #data[other_cols] = data[other_cols].fillna(missing_value_placeholder).infer_objects(copy=False)
+
+
 
     # Ensure comments is a list
     if comments is None:
@@ -55,7 +57,8 @@ def format_to_seabass(data, metadata, filename, path, comments=None, missing_val
         if match:
             cycle = match.group(1)
             metadata['profile'] = cycle
-            metadata['id_fields_definitions'] = '1id:pre-tilt, 2id:post-tilt'
+            metadata['id_fields_definitions'] = '1id:pre-tilt,2id:post-tilt'
+            metadata['below_detection_limit'] = '-8888'
             comments.append(
                 'tilt_1id= pre-tilt, i.e. tilt of the instrument just before performing performing a radiometric measurement')
             comments.append('tilt = post-tilt, i.e. tilt of the instrument just after performing a radiometric measurement.')
@@ -64,6 +67,9 @@ def format_to_seabass(data, metadata, filename, path, comments=None, missing_val
     elif '_Kd' in filename:
         metadata['measurement_depth'] = 0
         metadata.pop('profile', None)
+        metadata.pop('below_detection_limit',None)
+
+    comments.append("")
 
     # Write the data and metadata to a .sb file
     file_path = os.path.join(path, filename)
@@ -122,6 +128,23 @@ def format_to_seabass(data, metadata, filename, path, comments=None, missing_val
             'Epar': 'uE/cm^2/s',
         }
 
+        formatt = {
+            'station': 's',
+            'date': 's',
+            'depth': '.4f',
+            'wt': '.4f',
+            'sal': '.4f',
+            'tilt': '.1f',
+            'time': 's',
+            'lat': '.5f',
+            'lon': '.5f',
+            'quality': 'd',
+            'kd': '.4f',
+            'ed': '.4f',
+            'Epar': '.4f',
+            'profile': 'd',
+        }
+
         units_list = []
         for col in data.columns:
             if any(key in col for key in ['quality', 'kd', 'ed', 'Epar', 'depth', 'wt', 'sal', 'tilt']):
@@ -143,4 +166,23 @@ def format_to_seabass(data, metadata, filename, path, comments=None, missing_val
         f.write('/end_header\n')
 
     # Write data rows without trailing blank lines
-    data.to_csv(file_path, sep=delim, index=False, header=False, mode='a')
+        for _,row in data.iterrows():
+            full = ''
+            for col in data.columns:
+                key = col
+                if col.startswith('ed'):
+                    key = 'ed'
+                elif col.startswith('kd'):
+                    key = 'kd'
+                elif col.startswith('tilt'):
+                    key = 'tilt'
+                if pd.isna(row[col]):
+                    full += missing_value_placeholder + delim
+                elif key == 'ed' and row[col] < 0:
+                    full += '-8888' + delim
+                else:
+                    full += f"{row[col]:{formatt[key]}}{delim}"
+            f.write(full[:-1] +'\n')
+
+
+   # data.to_csv(file_path, sep=delim, index=False, header=False, mode='a')

@@ -43,8 +43,6 @@ for number in list_wmo:
 
     subprocess.run(command_general, shell=True)
 
-#Extract complete list of hyperspectral floats from a file
-
 # http://www.argodatamgt.org/Access-to-data/Argo-GDAC-ftp-https-and-s3-servers
 
 # %% Get WMO - automatically go through the list of all floats
@@ -164,8 +162,12 @@ def zmld_boyer(s, t, p):
         mldepthptemp_mldindex = presinterp[ix]
 
         return mldepthdens_mldindex, mldepthptemp_mldindex
-def plot_ed_profiles(df, wmo, kd_df, wv_target, wv_og, ed0, depth_col='depth'):
+def plot_ed_profiles(df, wmo, kd_df, wv_target, wv_og, ed0, flags_df, depth_col='depth'):
     # Define the path to the figure
+
+    kd_df.replace('-9999', np.nan, inplace=True)
+    ed0.replace('-9999', np.nan, inplace=True)
+    df = df.dropna(subset=['depth']) # Don't want nan in depth col
 
     # Extract the ED columns from the DataFrame
     ed_columns = [col for col in df.columns if col.startswith('ed')]
@@ -270,13 +272,8 @@ def plot_ed_profiles(df, wmo, kd_df, wv_target, wv_og, ed0, depth_col='depth'):
             ax2.set_xlabel('Wavelength (nm)')
             ax2.set_ylabel('Kd Values')
             ax2.set_title('Hyperspectral Kd')
-
-            # Calculate the minimum and maximum values for the filtered columns
-            k_value = kd_df[kd_df['profile'] == cycle][kd_columns].values[0]
-
-            # Set the y-axis limits of ax2 based on the filtered values
-            ax2.set_ylim([0.90 * min(k_value[~np.isnan(k_value)]),
-                          1.05 * max(k_value[~np.isnan(k_value)])])
+            ax2.set_ylim([0.90 * min(kd_values[~np.isnan(kd_values)]),
+                          1.05 * max(kd_values[~np.isnan(kd_values)])])
             ax2.set_xlim([min(wv_og), 700])
 
             # Plot the ED profiles
@@ -297,16 +294,29 @@ def plot_ed_profiles(df, wmo, kd_df, wv_target, wv_og, ed0, depth_col='depth'):
                 ed0_s = ed0[ed0['profile'] == cycle][ed0_col].values[0]
                 ed0_unc_value = ed0[ed0['profile'] == cycle][ed0_col + '_unc'].values[0]
                 # Filter the DataFrame once
+
+                flags_prof = flags_df[(pd.to_numeric(flags_df['profile']) == cycle)]
                 df_filtered = df[pd.to_numeric(df['profile']) == cycle]
-                df_filtered_flag = df_filtered[df_filtered['quality'] == 0].copy()
+
+                flags = flags_prof[f'flag_{ed_wavelengths[closest_indexs[idx]]}'].reset_index(drop=True).reindex(df_filtered.index)
+                good_flags = flags[flags == 0].index
+                question_flags = flags[flags == 1].index
 
                 # Scatter plot for all data points
                 ax.scatter(df_filtered[ed_col], df_filtered[depth_col],
                            label=f'{ed_col}', c=colors[idx], alpha=0.3, marker='x')
-                ax.scatter(df_filtered_flag[ed_col], df_filtered_flag[depth_col],
-                           label=f'{ed_col}', c=colors[idx])
+                ax.scatter(df_filtered[ed_col][question_flags], df_filtered[depth_col][question_flags],
+                       label=f'Flagged {ed_col}', c=colors[idx], alpha=0.3, marker='o')
+                ax.scatter(df_filtered[ed_col][good_flags], df_filtered[depth_col][good_flags],
+                           label=f'Flagged {ed_col}', c=colors[idx], alpha=0.7, marker='o')
 
-                new_depth_values = np.linspace(df[df['profile'] == cycle][depth_col].min(), 50, len(df[depth_col]))
+
+            # ax.scatter(df_filtered_flag1[ed_col], df_filtered_flag1[depth_col],
+            #            label=f'{ed_col}', c=colors[idx], alpha=0.5, marker='^')
+            #     ax.scatter(df_filtered_flag[ed_col], df_filtered_flag[depth_col],
+            #                label=f'{ed_col}', c=colors[idx])
+
+                new_depth_values = np.linspace(df[pd.to_numeric(df['profile']) == cycle][depth_col].min(), 50, len(df[depth_col]))
                 ed_predicted = ed0_s * np.exp(-kd_value * new_depth_values)
                 ed_predicted_upper = (ed0_s - ed0_unc_value) * np.exp(-(kd_value + kd_unc_value) * new_depth_values)
                 ed_predicted_lower = (ed0_s + ed0_unc_value) * np.exp(-(kd_value - kd_unc_value) * new_depth_values)
@@ -321,7 +331,7 @@ def plot_ed_profiles(df, wmo, kd_df, wv_target, wv_og, ed0, depth_col='depth'):
 
             plt.tight_layout()
             plt.show()
-        #    fig.savefig(figure_path)
+            fig.savefig(figure_path)
         else:
             print(f"Figure already exists at {figure_path}")
 # Bootstrapping function
@@ -336,8 +346,7 @@ def bootstrap_fit_klu(df, n_iterations=100, fit_method='iterative'):
 
         # Run the fit_klu function
         try :
-            result = Function_KD.fit_klu(df_resampled, fit_method='iterative', wl_interp_method='None', smooth_method='None',
-                                         only_continuous_obs=False)
+            result = Function_KD.fit_klu(df_resampled, fit_method='iterative', wl_interp_method='None', smooth_method='None',  only_continuous_obs=False)
             bootstrap_results.append(result['Kl'].values)
             bootstrap_Ed0.append(result['Luf'].values)
         except Exception as e:
@@ -387,9 +396,11 @@ def bootstrap_speed_depth(df,  Speed,  n_iterations=100):
 
     return median_luf_depth, std_luf_depth
 
-data_Kd, data_Ed0 = [], []
 
 for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
+
+    data_Kd, data_Ed0 = [], []
+    data_flags = pd.DataFrame()
 
     # Check if the float has profiles
     if not os.path.exists(os.path.join(root, wmo, 'profiles')):
@@ -402,34 +413,36 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         os.makedirs(os.path.join(Processed_profiles, wmo))
     else:
         print(f'Processed folder exists for float {wmo}. Retrieving Ed and Kd files')
-        try:
-            Ed_physic = pd.read_csv(os.path.join(Processed_profiles, wmo, (wmo + '_Ed.csv')))
-            Lu_physic = pd.DataFrame()
-        except (FileNotFoundError, pd.errors.EmptyDataError):
-            Ed_physic = pd.DataFrame()
-            print(f'Retrieval failed for float {wmo} Ed. Creating new dataframe...')
 
-        try:
-            Kd = pd.read_csv(os.path.join(Processed_profiles, wmo, (wmo + '_Kd.csv')))
-        except (FileNotFoundError, pd.errors.EmptyDataError):
-            columns_data = {'profile': [], 'date': [], 'time': [], 'lon': [], 'lat': []}
-            # Use dictionary comprehension to add columns '0' to '139' with pd.NA as their values
-            columns_data.update({str(i): pd.NA for i in range(141)})
-            # Create the DataFrame
-            Kd = pd.DataFrame(columns_data)
-            print(f"Retrieval failed for float {wmo} Kd. Creating new dataframe...")
 
-        try:
-            Ed0 = pd.read_csv(os.path.join(Processed_profiles, wmo, (wmo + '_Ed0.csv')))
-        except (FileNotFoundError, pd.errors.EmptyDataError):
-            columns_data = {'profile': [], 'date': [], 'time': [], 'lon': [], 'lat': []}
-            # Use dictionary comprehension to add columns '0' to '139' with pd.NA as their values
-            columns_data.update({str(i): pd.NA for i in range(141)})
-            # Create the DataFrame
-            Ed0 = pd.DataFrame(columns_data)
-            print(f"Retrieval failed for float {wmo} Ed0. Creating new dataframe...")
+    try:
+        Ed_physic = pd.read_csv(os.path.join(Processed_profiles, wmo, (wmo + '_Ed.csv')))
+        Lu_physic = pd.DataFrame()
+    except (FileNotFoundError, pd.errors.EmptyDataError):
+        Ed_physic = pd.DataFrame()
+        print(f'Retrieval failed for float {wmo} Ed. Creating new dataframe...')
 
-    # Check processed files
+    try:
+        Kd = pd.read_csv(os.path.join(Processed_profiles, wmo, (wmo + '_Kd.csv')))
+    except (FileNotFoundError, pd.errors.EmptyDataError):
+        columns_data = {'profile': [], 'date': [], 'time': [], 'lon': [], 'lat': []}
+        # Use dictionary comprehension to add columns '0' to '139' with pd.NA as their values
+        columns_data.update({str(i): pd.NA for i in range(141)})
+        # Create the DataFrame
+        Kd = pd.DataFrame(columns_data)
+        print(f"Retrieval failed for float {wmo} Kd. Creating new dataframe...")
+
+    try:
+        Ed0 = pd.read_csv(os.path.join(Processed_profiles, wmo, (wmo + '_Ed0.csv')))
+    except (FileNotFoundError, pd.errors.EmptyDataError):
+        columns_data = {'profile': [], 'date': [], 'time': [], 'lon': [], 'lat': []}
+        # Use dictionary comprehension to add columns '0' to '139' with pd.NA as their values
+        columns_data.update({str(i): pd.NA for i in range(141)})
+        # Create the DataFrame
+        Ed0 = pd.DataFrame(columns_data)
+        print(f"Retrieval failed for float {wmo} Ed0. Creating new dataframe...")
+
+        # Check processed files
     processed_cycles = []
     processed_profiles = os.listdir(os.path.join(Processed_profiles, wmo))
     for file_name in processed_profiles:
@@ -451,15 +464,16 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         continue
 
     comments = [
-        'These data were collected and made freely available by the International Argo Program and the national programs '
-        'that contribute to it.  (https://argo.ucsd.edu,  https://www.ocean-ops.org).  The Argo Program is part of the '
-        'Global Ocean Observing System https://doi.org/10.17882/42182. ',
-        f'Link to BGC-Argo GDAC for raw float data: https://data-argo.ifremer.fr/aux/coriolis/{wmo}',
-        'Quality Flag relates to the radiometric quality control described in Organelli et al., 2016 (DOI: 10.1175/JTECH-D-15-0193.1).'
-        'Flag is recorded for the wavelength closest to 490.0 nm. Definition:',
-        '    0. Acceptable measurement.',
-        '    1. Questionable measurement.',
-        '    2. Bad measurement.',
+        'These data were collected and made freely available by the International Argo Program and the national programs ',
+        'that contribute to it (https://argo.ucsd.edu, https://www.ocean-ops.org). The Argo Program is part of the ',
+        'Global Ocean Observing System https://doi.org/10.17882/42182.',
+        f'Link to BGC-Argo GDAC for raw float data: https://data-argo.ifremer.fr/aux/coriolis/{wmo}.',
+        'Quality Flag relates to the overall radiometric quality control based on Organelli et al., 2016 (DOI: 10.1175/JTECH-D-15-0193.1).',
+        'Quality control is performed at each wavelength, see documentation for details.',
+        'The overall "quality" flag per profile is recorded based on performance of all wavelengths below 600nm with following definition:',
+        '    0. Good: >50% of wavelengths passed individual QC.',
+        '    1. Questionable: >50% of wavelengths are questionable following individual QC or >5% of wavelengths flagged as Bad.',
+        '    2. Bad: >50% of wavelengths are bad following individual QC.',
     ]
 
     # Define metadata for the SeaBASS file
@@ -490,15 +504,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         if '001D' in filename:
             print('Dark file, skipping') # Skip the file if it is a dark file
             continue
-
-        # if (Kd['profile'] == int(current_cycle)).any() and (Ed_physic['profile'] == int(current_cycle)).any() and (
-        #        Ed0['profile'] == int(current_cycle)).any():
-        #     print(f'Profile {current_cycle} already processed for float {wmo}. Skipping...')
-        #     continue
-
-        # if iteration_count >= max_iterations:
-        #     break  # Exit the loop if maximum iterations reached
-        # iteration_count += 1
 
         data = xr.open_dataset(filename)
 
@@ -621,9 +626,10 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         # Organelli QC
         results = Organelli_QC.organelli16_qc(Ed_profile, lat=Ed_profile.lat[0],
                                                           lon=Ed_profile.lon[0],qc_wls=wavelengths , step2_r2=0.995, step3_r2=0.997,
-                                                          step3_r3=0.998, skip_meta_tests=False, skip_dark_test=True)
+                                                          step3_r3=0.999, skip_meta_tests=False, skip_dark_test=True)
 
-        # Create an empty DataFrame with wavelengths as columns
+        # Plot ed487.0 as a function of depth
+
         df_flags = pd.DataFrame(columns=wavelengths, index=range(len(Ed_profile)))
         df_results = pd.DataFrame({
             'global_flag': [np.nan],
@@ -635,7 +641,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         for result in results:
             # Extract the wavelength and flags
             global_flag, flags, status, polynomial_fit, wv = result
-
             if len(flags) < len(df_flags):
                 # Create a new array filled with NaN of the same length as df_flags
                 new_flags = np.full(len(df_flags), 2)
@@ -643,10 +648,8 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
                 new_flags[:len(flags)] = flags
             else:
                 new_flags = flags
-
                 # Assign the new_flags array to the appropriate column in df_flags
             df_flags[wv] = new_flags
-
             # Add these values as a new row to the DataFrame
             new_row = pd.DataFrame({
                 'global_flag': [global_flag],
@@ -657,14 +660,38 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             df_results = pd.concat([df_results, new_row], ignore_index=True)
             df_results = df_results.dropna(how='all').reset_index(drop=True)
 
-        df_results_filtered = df_results[df_results['wavelength'] < 600]
+        # flagged_indices = df_flags[548.0] == 2
+        # non_flagged_indices = ~flagged_indices
+        # plt.figure(figsize=(10, 6))
+        # plt.plot(Ed_profile[548.0][non_flagged_indices], Ed_profile['depth'][non_flagged_indices], marker='o', linestyle='-', label='Non-flagged')
+        # plt.plot(Ed_profile[548.0][flagged_indices], Ed_profile['depth'][flagged_indices], marker='x', linestyle='-', label='Flagged')
+        # plt.ylabel('Depth (m)')
+        # plt.xlabel('ed487.0')
+        # plt.ylim(0, 50)
+        # plt.grid(True)
+        # plt.gca().invert_yaxis()  # Reverse the y-axis
+        # plt.show()
 
+
+        data_dict_flags = {
+            'depth': Ed_profile['depth'].values,
+            'profile': [current_cycle]* len(Ed_profile)}
+
+        for wavelength in wavelengths:
+            data_dict_flags[f'flag_{wavelength}'] = df_flags[wavelength].values
+
+        data_flags = pd.concat([data_flags, pd.DataFrame(data_dict_flags)], ignore_index=True)
+
+        df_results_filtered = df_results[df_results['wavelength'] < 600]
         if (df_results_filtered['global_flag'] == 2).sum() / len(df_results_filtered) > 0.5 :
             Ed_profile['quality'] = 2 #
             print(f"Cycle {current_cycle} fails QC for more than 50% of wavelength: Careful proceeding : BAD")
-        elif (df_results_filtered['global_flag'] == 1).sum() / len(df_results_filtered) > 0.5 :
-            print(f"Cycle {current_cycle} questionable QC for more than 50% of wavelength: QUESTIONABLE")
+
+        elif ((df_results_filtered['global_flag'] == 1).sum() / len(df_results_filtered) > 0.5  or
+              (df_results_filtered['global_flag'] == 2).sum() / len(df_results_filtered) > 0.05) :
+            print(f"Cycle {current_cycle} questionable QC for more than 50% of wavelength or 5% bad :QUESTIONABLE")
             Ed_profile['quality'] = 1
+
         else:
             Ed_profile['quality'] = 0
             print(f"Cycle {current_cycle} passes QC for more than 50% of wavelength: PASSED")
@@ -686,7 +713,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             # Get the flag values for this wavelength
             flags = df_flags[wavelength]
             # Replace the values in new_Ed where the flag is 2 with np.nan
-            new_Ed.loc[flags[flags == 2].index , column] = np.nan
+            new_Ed.loc[flags[flags == 2].index, column] = np.nan
 
         # Add to global table of the float
         new_column_names = ["kd" + str(wavelength) for wavelength in wavelengths]
@@ -708,10 +735,8 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         # Apply the renaming for the second set of columns
         Ed0 = Ed0.rename(columns=column_mapping_unc)
 
-        # kd_res = Function_KD.fit_klu(new_Ed, fit_method='iterative', wl_interp_method='None', smooth_method='None',
-        #                              only_continuous_obs=False)
 
-        # Calculate the median and standard deviation across the bootstrap samples
+     # Calculate the median and standard deviation across the bootstrap samples
         median_luf_kd, std_luf_kd, median_Ed0, std_Ed0 = bootstrap_fit_klu(new_Ed, n_iterations=100, fit_method='iterative')
         if ~(np.isnan(median_luf_kd)).all():
             median_luf_kd = median_luf_kd.mask(median_luf_kd < 0, np.nan)
@@ -754,7 +779,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
         # save csv file
         # Move 'date' and 'time' columns to the front
-        columns = ['date', 'time'] + [col for col in Ed_profile.columns if col not in ['date', 'time']]
+        columns = ['date', 'time','depth'] + [col for col in Ed_profile.columns if col not in ['date', 'time','depth']]
         Ed_profile = Ed_profile[columns]
         non_date_columns = Ed_profile.columns.difference(['date', 'time'])
         Ed_profile[non_date_columns] = Ed_profile[non_date_columns].apply(pd.to_numeric, errors='coerce')
@@ -766,6 +791,9 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         path = os.path.join(Processed_profiles, wmo )
        # Ed_profile.to_csv(os.path.join(path, fileN +'.csv'), index=False)
         print(f" Ed profile for float {wmo} Cycle {current_cycle} was created")
+        for col in Ed_profile.columns:
+            if col.startswith('ed'):
+                Ed_profile[col] = Ed_profile[col].apply(lambda x: -8888 if x < 0 else x)
         #Create the .sb file
         sb.format_to_seabass(Ed_profile, metadata, fileN, path, comments, missing_value_placeholder= '-9999', delimiter= 'comma')
 
@@ -774,10 +802,14 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         Ed_physic = pd.concat([Ed_physic, Ed_with_station])
 
     Kd = pd.DataFrame(data_Kd)
+    non_date_columns = Kd.columns.difference(['profile','date', 'time'])
+    Kd[non_date_columns] = Kd[non_date_columns].apply(pd.to_numeric, errors='coerce')
     Kd = Kd.round(4)
 
     Ed0 = pd.DataFrame(data_Ed0)
     Ed0 = Ed0.round(4)
+
+    flags_df = data_flags
 
     # Load the watercoeff file
     watercoeff = pd.read_csv('watercoeff.csv')
@@ -804,7 +836,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
                     # Apply the condition to Kd dataset
 
-
                 Kd[col] = Kd.apply(lambda row: replace_if_less(row), axis=1)
                 Kd[unc_col] = Kd.apply(lambda row: replace_if_less(row), axis=1)
 
@@ -812,16 +843,19 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
                 Ed0[ed0_col] = Kd.apply(lambda row: replace_if_less(row), axis=1)
                 Ed0[ed0_unc_col] = Kd.apply(lambda row: replace_if_less(row), axis=1)
 
-if not Kd.empty:
-        Kd.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Kd.csv'), index=False)
-        print(f'Kd file for float {wmo} was created')
+    if not Kd.empty:
+         #   Kd = Kd.round(4)
+            Kd.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Kd.csv'), index=False)
+            print(f'Kd file for float {wmo} was created')
+            sb.format_to_seabass(Kd, metadata, 'PVST_VDIUP_'+ wmo + '_Kd_R0', path, comments, missing_value_placeholder='-9999', delimiter='comma')
 
-        sb.format_to_seabass(Kd, metadata, 'PVST_VDIUP_'+ wmo + '_Kd_R0', path, comments, missing_value_placeholder='-9999', delimiter='comma')
+            Ed0.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed0.csv'), index=False)
+            print(f'Ed0 file for float {wmo} was created')
+            Ed_physic.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed.csv'), index=False)
+            print(f'Ed file for float {wmo} was created')
 
-        Ed0.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed0.csv'), index=False)
-        print(f'Ed0 file for float {wmo} was created')
-        Ed_physic.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed.csv'), index=False)
-        print(f'Ed file for float {wmo} was created')
+            plot_ed_profiles(df=Ed_physic, wmo=wmo, kd_df=Kd, wv_target=[490, 555, 660], wv_og=wavelengths, ed0=Ed0,flags_df = flags_df,
+                     depth_col='depth')
 
 # %% QUALITY CONTROL OF ALL KD PROFILES FROM A SINGLE FLOAT
 
@@ -829,7 +863,6 @@ if not Kd.empty:
 Kd = pd.read_csv(os.path.join(Processed_profiles, wmo, (wmo + '_Kd.csv')))
 Ed0 = pd.read_csv(os.path.join(Processed_profiles, wmo, (wmo + '_Ed0.csv')))
 Ed_all = pd.read_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed.csv'))
-
 
 def extracted_wavelengths(Ed, pattern='ed'):
     # Extract wavelengths from the Kd DataFrame
@@ -848,8 +881,8 @@ def extracted_wavelengths(Ed, pattern='ed'):
 wavelengths = extracted_wavelengths(Ed0, pattern='ed')
 
 plot_ed_profiles(df = Ed_all,wmo =  wmo, kd_df =Kd, wv_target = [490, 550, 660], wv_og=wavelengths, ed0= Ed0, depth_col='depth')
-# %%
 
+# %%
 # Interactive figure to see if all Kd are really good and assign them a bad flag if not
 
 kd_columns = [col for col in Kd.columns if col.startswith('kd') and 'unc' not in col]
