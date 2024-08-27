@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import seabass_maker as sb
-sys.path.append('/Users/charlotte.begouen/Documents/Hyperspectral_floats_Herve')
+sys.path.append('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve')
 import Toolbox_RAMSES as tools
 import matplotlib.pyplot as plt
 import Function_KD
@@ -14,8 +14,8 @@ import gsw
 import Organelli_QC
 import matplotlib.gridspec as gridspec
 import subprocess
-root = '/Users/charlotte.begouen/Documents/Hyperspectral_floats_Herve'
-Processed_profiles = '/Users/charlotte.begouen/Documents/Hyperspectral_floats_Herve/Outputs'
+root = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve'
+Processed_profiles = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/Outputs'
 
 
 # %% Download all the profiles from the floats from the GDAC
@@ -341,9 +341,13 @@ def bootstrap_fit_klu(df, n_iterations=100, fit_method='iterative'):
 
     for i in range(n_iterations):
         # Resample the DataFrame with replacement
-        df_resampled = df.sample(frac=0.8, replace=False, random_state=i)
-        df_resampled = df_resampled.reset_index(drop=True)
-
+        df_resampled = df.copy()
+        for col in df.columns:
+            if col.startswith('ed'):
+                # Identify non-NaN values
+                non_nan_indices = df[col].dropna().index
+                nan_indices = pd.Series(non_nan_indices).sample(frac=0.2, random_state=i)
+                df_resampled.loc[nan_indices, col] = np.nan
         # Run the fit_klu function
         try :
             result = Function_KD.fit_klu(df_resampled, fit_method='iterative', wl_interp_method='None', smooth_method='None',  only_continuous_obs=False)
@@ -552,8 +556,11 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             Ed_physic_profile, Lu_physic_profile = tools.format_ramses(
                 filename, meta_filename, cals[(cals['rad'] == 'Ed') & (cals['wmo'] == wmo)]['calibration_file'].iloc[0],
                 cals[(cals['rad'] == 'Lu') & (cals['wmo'] == wmo)]['calibration_file'].iloc[0], Ed_n_prof, Lu_n_prof)
-            Ed_physic_profile = Ed_physic_profile.round(4)
-            Lu_physic_profile = Lu_physic_profile.round(4)
+
+        columns_to_check = [col for col in Ed_physic_profile.columns if col not in ['tilt', 'tilt_1id']]
+        if Ed_physic_profile[columns_to_check].map(lambda x: pd.isna(x) or np.isinf(x)).all().all():
+            print('All values in the relevant columns are NaN or infinite. Skipping...')
+            continue
 
         #Correct tilt from 10th of degree to 1 degree
         Ed_physic_profile['tilt'] = Ed_physic_profile['tilt'] / 10
@@ -565,9 +572,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
                                     'sal': [np.nan] * Ed_physic_profile.shape[0],
                                     'lon': [data.LONGITUDE.sel(N_PROF=Ed_n_prof).values] * Ed_physic_profile.shape[0],
                                     'lat': [data.LATITUDE.sel(N_PROF=Ed_n_prof).values] * Ed_physic_profile.shape[0]})
-        # Round the lat and lon to 5 decimal places
-        metadata_ed['lon'] = metadata_ed['lon'].astype(float).round(5)
-        metadata_ed['lat'] = metadata_ed['lat'].astype(float).round(5)
+
 
         DT = [data.JULD.sel(N_PROF=Ed_n_prof).values] * Ed_physic_profile.shape[0]
         pres_ed = data.PRES.sel(N_PROF=Ed_n_prof).values[0:Ed_physic_profile.shape[0]]
@@ -722,7 +727,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         # Generate new column names with "_unc" for the following 70 columns
         new_column_names_unc = ["kd" + str(wavelength) + "_unc" for wavelength in wavelengths]
         # Map these new names with "_unc" to the columns 74 to 143
-        column_mapping_unc = dict(zip(Kd.columns[len(wavelengths)+ 6 :len(wavelengths)*2 +6], new_column_names_unc))
+        column_mapping_unc = dict(zip(Kd.columns[len(wavelengths)+ 6: len(wavelengths)*2 +6], new_column_names_unc))
         # Apply the renaming for the second set of columns
         Kd = Kd.rename(columns=column_mapping_unc)
 
@@ -738,11 +743,13 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
      # Calculate the median and standard deviation across the bootstrap samples
         median_luf_kd, std_luf_kd, median_Ed0, std_Ed0 = bootstrap_fit_klu(new_Ed, n_iterations=100, fit_method='iterative')
+        result = Function_KD.fit_klu(new_Ed,  fit_method='iterative', wl_interp_method='None', smooth_method='None',  only_continuous_obs=False)
+        result_Kd = result['Kl']
         if ~(np.isnan(median_luf_kd)).all():
-            median_luf_kd = median_luf_kd.mask(median_luf_kd < 0, np.nan)
+            result_Kd = result_Kd.mask(result_Kd < 0, np.nan)
             median_luf_depth, std_luf_depth = bootstrap_speed_depth(new_Ed, Speed, n_iterations=100)
             # Calculate uncertainties
-            Kd_uncertainty = (std_luf_kd ** 2 + std_luf_depth ** 2) ** 0.5
+            Kd_uncertainty = (std_luf_kd/10 ** 2 + std_luf_depth/10 ** 2) ** 0.5 # Take standard error = std/sqt(100)
         else:
             Kd_uncertainty = pd.Series([np.nan] * len(wavelengths))
             std_Ed0 = pd.Series([np.nan] * len(wavelengths))
@@ -756,7 +763,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             'quality': Ed_profile['quality'][0]
         }
 
-        data_dict_K.update(dict(zip(Kd.columns[5: len(wavelengths) +5],median_luf_kd)))
+        data_dict_K.update(dict(zip(Kd.columns[5: len(wavelengths) +5],result_Kd)))
         data_dict_K.update(dict(zip(Kd.columns[len(wavelengths) +6: len(wavelengths)*2 +6], Kd_uncertainty.values.reshape(-1).astype(np.float32))))
 
         data_Kd.append(data_dict_K)
@@ -781,19 +788,11 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         # Move 'date' and 'time' columns to the front
         columns = ['date', 'time','depth'] + [col for col in Ed_profile.columns if col not in ['date', 'time','depth']]
         Ed_profile = Ed_profile[columns]
-        non_date_columns = Ed_profile.columns.difference(['date', 'time'])
-        Ed_profile[non_date_columns] = Ed_profile[non_date_columns].apply(pd.to_numeric, errors='coerce')
-        Ed_profile = Ed_profile.round(4)
-        Ed_profile['lat'].round(4)
 
         #Create the .csv file
         fileN ='PVST_VDIUP_'+ wmo + '_' + current_cycle + '_Ed' +'_R0'
         path = os.path.join(Processed_profiles, wmo )
        # Ed_profile.to_csv(os.path.join(path, fileN +'.csv'), index=False)
-        print(f" Ed profile for float {wmo} Cycle {current_cycle} was created")
-        for col in Ed_profile.columns:
-            if col.startswith('ed'):
-                Ed_profile[col] = Ed_profile[col].apply(lambda x: -8888 if x < 0 else x)
         #Create the .sb file
         sb.format_to_seabass(Ed_profile, metadata, fileN, path, comments, missing_value_placeholder= '-9999', delimiter= 'comma')
 
@@ -802,12 +801,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         Ed_physic = pd.concat([Ed_physic, Ed_with_station])
 
     Kd = pd.DataFrame(data_Kd)
-    non_date_columns = Kd.columns.difference(['profile','date', 'time'])
-    Kd[non_date_columns] = Kd[non_date_columns].apply(pd.to_numeric, errors='coerce')
-    Kd = Kd.round(4)
-
     Ed0 = pd.DataFrame(data_Ed0)
-    Ed0 = Ed0.round(4)
 
     flags_df = data_flags
 
