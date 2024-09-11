@@ -14,6 +14,7 @@ import gsw
 import Organelli_QC
 import matplotlib.gridspec as gridspec
 import subprocess
+import datetime
 root = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve'
 Processed_profiles = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/Outputs'
 
@@ -72,96 +73,6 @@ for wmo in wmos:
             print(f'No calibration file for {rad}' + ' for float ' + wmo + ' in the database.')
 
 # %% Read and Process Profiles
-def zmld_boyer(s, t, p):
-    """
-    Computes mixed layer depth, based on de Boyer Montégut et al., 2004.
-
-    Parameters
-    ----------
-    s : array_like
-        salinity [psu (PSS-78)]
-    t : array_like
-        temperature [℃ (ITS-90)]
-    p : array_like
-        pressure [db].
-
-    Notes
-    -----
-    Based on density with fixed threshold criteria
-    de Boyer Montégut et al., 2004. Mixed layer depth over the global ocean:
-        An examination of profile data and a profile-based climatology.
-        doi:10.1029/2004JC002378
-
-    dataset for test and more explanation can be found at:
-    http://www.ifremer.fr/cerweb/deboyer/mld/Surface_Mixed_Layer_Depth.php
-
-    Codes based on : http://mixedlayer.ucsd.edu/
-
-    """
-    # Remove NaN values
-    valid_indices = ~np.isnan(s) & ~np.isnan(t) & ~np.isnan(p)
-    s, t, p = s[valid_indices], t[valid_indices], p[valid_indices]
-    s, t, p = s.reset_index(drop=True), t.reset_index(drop=True), p.reset_index(drop=True)
-
-
-    m = len(s)
-
-    if m <= 1:
-        mldepthdens_mldindex = 0
-        mldepthptemp_mldindex = 0
-        return mldepthdens_mldindex, mldepthptemp_mldindex
-    else:
-        # starti = min(find((pres-10).^2==min((pres-10).^2)));
-        starti = np.nanargmin((p - 10.0) ** 2)
-        starti = 0
-        pres = p[starti:m]
-        sal = s[starti:m]
-        temp = t[starti:m]
-
-        pden = gsw.rho(sal, temp, pres) - 1000
-
-        mldepthdens_mldindex = m - 1
-        for i, pp in enumerate(pden):
-            if np.abs(pden[starti] - pp) > 0.03:
-                mldepthdens_mldindex = i
-                break
-
-        # Interpolate to exactly match the potential density threshold.
-        presseg = [pres[mldepthdens_mldindex - 1], pres[mldepthdens_mldindex]]
-        pdenseg = [
-            pden[starti] - pden[mldepthdens_mldindex - 1],
-            pden[starti] - pden[mldepthdens_mldindex],
-        ]
-        P = np.polyfit(presseg, pdenseg, 1)
-        presinterp = np.linspace(presseg[0], presseg[1], 3)
-        pdenthreshold = np.polyval(P, presinterp)
-
-        # The potential density threshold MLD value:
-        ix = np.max(np.where(np.abs(pdenthreshold) < 0.03)[0])
-        mldepthdens_mldindex = presinterp[ix]
-
-        # Search for the first level that exceeds the temperature threshold.
-        mldepthptmp_mldindex = m - 1
-        for i, tt in enumerate(temp):
-            if np.abs(temp[starti] - tt) > 0.2:
-                mldepthptmp_mldindex = i
-                break
-
-        # Interpolate to exactly match the temperature threshold.
-        presseg = [pres[mldepthptmp_mldindex - 1], pres[mldepthptmp_mldindex]]
-        tempseg = [
-            temp[starti] - temp[mldepthptmp_mldindex - 1],
-            temp[starti] - temp[mldepthptmp_mldindex],
-        ]
-        P = np.polyfit(presseg, tempseg, 1)
-        presinterp = np.linspace(presseg[0], presseg[1], 3)
-        tempthreshold = np.polyval(P, presinterp)
-
-        # The temperature threshold MLD value:
-        ix = np.max(np.where(np.abs(tempthreshold) < 0.2)[0])
-        mldepthptemp_mldindex = presinterp[ix]
-
-        return mldepthdens_mldindex, mldepthptemp_mldindex
 def plot_ed_profiles(df, wmo, kd_df, wv_target, wv_og, ed0, flags_df, depth_col='depth'):
     # Define the path to the figure
 
@@ -171,7 +82,7 @@ def plot_ed_profiles(df, wmo, kd_df, wv_target, wv_og, ed0, flags_df, depth_col=
 
     # Extract the ED columns from the DataFrame
     ed_columns = [col for col in df.columns if col.startswith('ed')]
-    kd_columns = [col for col in kd_df.columns if col.startswith('kd') and 'unc' not in col]
+    kd_columns = [col for col in kd_df.columns if col.startswith('kd') and 'unc' not in col and '_se' not in col and '_bincount' not in col]
     kd_unc_columns = [col for col in kd_df.columns if col.startswith('kd') and 'unc' in col]
     ed0_columns = [col for col in ed0.columns if col.startswith('ed0')and 'unc' not in col]
     ed0_unc_columns = [col for col in ed0.columns if col.startswith('ed') and 'unc' in col]
@@ -310,12 +221,6 @@ def plot_ed_profiles(df, wmo, kd_df, wv_target, wv_og, ed0, flags_df, depth_col=
                 ax.scatter(df_filtered[ed_col][good_flags], df_filtered[depth_col][good_flags],
                            label=f'Flagged {ed_col}', c=colors[idx], alpha=0.7, marker='o')
 
-
-            # ax.scatter(df_filtered_flag1[ed_col], df_filtered_flag1[depth_col],
-            #            label=f'{ed_col}', c=colors[idx], alpha=0.5, marker='^')
-            #     ax.scatter(df_filtered_flag[ed_col], df_filtered_flag[depth_col],
-            #                label=f'{ed_col}', c=colors[idx])
-
                 new_depth_values = np.linspace(df[pd.to_numeric(df['profile']) == cycle][depth_col].min(), 50, len(df[depth_col]))
                 ed_predicted = ed0_s * np.exp(-kd_value * new_depth_values)
                 ed_predicted_upper = (ed0_s - ed0_unc_value) * np.exp(-(kd_value + kd_unc_value) * new_depth_values)
@@ -335,35 +240,39 @@ def plot_ed_profiles(df, wmo, kd_df, wv_target, wv_og, ed0, flags_df, depth_col=
         else:
             print(f"Figure already exists at {figure_path}")
 # Bootstrapping function
-def bootstrap_fit_klu(df, n_iterations=100, fit_method='iterative'):
+def bootstrap_fit_klu_depth(df, Speed, n_iterations=100, fit_method='iterative'):
     bootstrap_results = []
     bootstrap_Ed0 = []
+    random_numbers = np.random.normal(loc=0, scale=1, size=n_iterations)
 
     for i in range(n_iterations):
         # Resample the DataFrame with replacement
         df_resampled = df.copy()
+        df_resampled['depth'] = df_resampled['depth'] + Speed * random_numbers[i]
+
         for col in df.columns:
             if col.startswith('ed'):
                 # Identify non-NaN values
                 non_nan_indices = df[col].dropna().index
                 nan_indices = pd.Series(non_nan_indices).sample(frac=0.2, random_state=i)
                 df_resampled.loc[nan_indices, col] = np.nan
+
         # Run the fit_klu function
-        try :
-            result = Function_KD.fit_klu(df_resampled, fit_method='iterative', wl_interp_method='None', smooth_method='None',  only_continuous_obs=False)
+        try:
+            result = Function_KD.fit_klu(df_resampled, fit_method='iterative', wl_interp_method='None',
+                                         smooth_method='None', only_continuous_obs=False)
             bootstrap_results.append(result['Kl'].values)
             bootstrap_Ed0.append(result['Luf'].values)
         except Exception as e:
             print(f"An error occurred during bootstrap iteration {i}: {e}")
             continue
 
-    if np.isnan(bootstrap_results).all() :
-        median_luf_kd =  [np.nan] * len(wavelengths)
+    if np.isnan(bootstrap_results).all():
+        median_luf_kd = [np.nan] * len(wavelengths)
         std_luf_kd = [np.nan] * len(wavelengths)
         median_ed0 = [np.nan] * len(wavelengths)
         std_ed0 = [np.nan] * len(wavelengths)
-
-    else :
+    else:
         # Convert the list of results into a DataFrame
         bootstrap_results = np.array(bootstrap_results)
         bootstrap_results_df = pd.DataFrame(bootstrap_results, columns=result.index)
@@ -376,30 +285,6 @@ def bootstrap_fit_klu(df, n_iterations=100, fit_method='iterative'):
         std_luf_kd = bootstrap_results_df.std()
 
     return median_luf_kd, std_luf_kd, median_ed0, std_ed0
-# Bootstrapping for dpeth dependancy on speed
-def bootstrap_speed_depth(df,  Speed,  n_iterations=100):
-    bootstrap_results = []
-    random_numbers = np.random.normal(loc=0, scale=1, size=n_iterations)
-
-    for i in random_numbers:
-        # Resample the DataFrame with replacement
-        df_resampled = df.copy()
-        df_resampled['depth'] = df_resampled['depth'] + Speed * i
-        # Run the fit_klu function
-        result = Function_KD.fit_klu(df_resampled, fit_method='iterative', wl_interp_method='None', smooth_method='None',
-                                     only_continuous_obs=False)
-        bootstrap_results.append(result['Kl'].values)
-
-    # Convert the list of results into a DataFrame
-    bootstrap_results = np.array(bootstrap_results)
-    bootstrap_results_df = pd.DataFrame(bootstrap_results, columns=result.index)
-
-    # Calculate the median and standard deviation across the bootstrap samples
-    median_luf_depth = bootstrap_results_df.median()
-    std_luf_depth = bootstrap_results_df.std()
-
-    return median_luf_depth, std_luf_depth
-
 
 for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
@@ -429,9 +314,9 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
     try:
         Kd = pd.read_csv(os.path.join(Processed_profiles, wmo, (wmo + '_Kd.csv')))
     except (FileNotFoundError, pd.errors.EmptyDataError):
-        columns_data = {'profile': [], 'date': [], 'time': [], 'lon': [], 'lat': []}
+        columns_data = {'profile': [], 'date': [], 'time': [], 'lon': [], 'lat': [], 'quality': []}
         # Use dictionary comprehension to add columns '0' to '139' with pd.NA as their values
-        columns_data.update({str(i): pd.NA for i in range(141)})
+        columns_data.update({str(i): pd.NA for i in range(282)})
         # Create the DataFrame
         Kd = pd.DataFrame(columns_data)
         print(f"Retrieval failed for float {wmo} Kd. Creating new dataframe...")
@@ -478,6 +363,10 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         '    0. Good: >50% of wavelengths passed individual QC.',
         '    1. Questionable: >50% of wavelengths are questionable following individual QC or >5% of wavelengths flagged as Bad.',
         '    2. Bad: >50% of wavelengths are bad following individual QC.',
+        ' 100 bootstrap iterations were performed to estimate the uncertainty field.',
+        'This wavelength-specific uncertainty encompasses the uncertainty in fitting the Kd profile (sub-selection of 80% of wavelength),'
+        ' and the uncertainty in the depth of the measurement (addition of a fuzz factor centered at 0).',
+        'Details on the uncertainty computation can be found in the documentation.',
     ]
 
     # Define metadata for the SeaBASS file
@@ -486,7 +375,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         'affiliations': 'University_of_Maine,University_of_Maine',
         'contact': 'nils.haentjens@maine.edu',
         'experiment': 'PVST_VDIUP',
-        'cruise': 'BGC_' + wmo,
+        'cruise': 'VDIUP-Argo-Kd',
         'platform_id': wmo,
         'instrument_manufacturer': 'TriOS',
         'instrument_model': 'RAMSES',
@@ -665,18 +554,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             df_results = pd.concat([df_results, new_row], ignore_index=True)
             df_results = df_results.dropna(how='all').reset_index(drop=True)
 
-        # flagged_indices = df_flags[548.0] == 2
-        # non_flagged_indices = ~flagged_indices
-        # plt.figure(figsize=(10, 6))
-        # plt.plot(Ed_profile[548.0][non_flagged_indices], Ed_profile['depth'][non_flagged_indices], marker='o', linestyle='-', label='Non-flagged')
-        # plt.plot(Ed_profile[548.0][flagged_indices], Ed_profile['depth'][flagged_indices], marker='x', linestyle='-', label='Flagged')
-        # plt.ylabel('Depth (m)')
-        # plt.xlabel('ed487.0')
-        # plt.ylim(0, 50)
-        # plt.grid(True)
-        # plt.gca().invert_yaxis()  # Reverse the y-axis
-        # plt.show()
-
 
         data_dict_flags = {
             'depth': Ed_profile['depth'].values,
@@ -722,34 +599,37 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
         # Add to global table of the float
         new_column_names = ["kd" + str(wavelength) for wavelength in wavelengths]
-        column_mapping = dict(zip(Kd.columns[5:len(wavelengths)+5], new_column_names))
+        column_mapping = dict(zip(Kd.columns[6:len(wavelengths)+6], new_column_names))
         Kd = Kd.rename(columns=column_mapping)
         # Generate new column names with "_unc" for the following 70 columns
         new_column_names_unc = ["kd" + str(wavelength) + "_unc" for wavelength in wavelengths]
         # Map these new names with "_unc" to the columns 74 to 143
         column_mapping_unc = dict(zip(Kd.columns[len(wavelengths)+ 6: len(wavelengths)*2 +6], new_column_names_unc))
-        # Apply the renaming for the second set of columns
         Kd = Kd.rename(columns=column_mapping_unc)
+        new_column_names_SE = ["kd" + str(wavelength) + "_se" for wavelength in wavelengths]
+        column_mapping_SE = dict(zip(Kd.columns[2*len(wavelengths) + 6: len(wavelengths) * 3 + 6], new_column_names_SE))
+        Kd = Kd.rename(columns=column_mapping_SE)
+        new_column_names_bin = ["kd" + str(wavelength) + "_bincount" for wavelength in wavelengths]
+        column_mapping_bin = dict(zip(Kd.columns[3*len(wavelengths) + 6: len(wavelengths) * 4 + 6], new_column_names_bin))
+        Kd = Kd.rename(columns=column_mapping_bin)
 
         new_column_names = ["ed0" + str(wavelength) for wavelength in wavelengths]
         column_mapping = dict(zip(Ed0.columns[5:len(wavelengths)+5], new_column_names))
         Ed0 = Ed0.rename(columns=column_mapping)
         new_column_names_unc = ["ed0" + str(wavelength) + "_unc" for wavelength in wavelengths]
-        # Map these new names with "_unc" to the columns 74 to 143
         column_mapping_unc = dict(zip(Ed0.columns[len(wavelengths)+6 :len(wavelengths)*2 +6], new_column_names_unc))
-        # Apply the renaming for the second set of columns
         Ed0 = Ed0.rename(columns=column_mapping_unc)
 
 
      # Calculate the median and standard deviation across the bootstrap samples
-        median_luf_kd, std_luf_kd, median_Ed0, std_Ed0 = bootstrap_fit_klu(new_Ed, n_iterations=100, fit_method='iterative')
+        median_luf_kd, std_luf_kd, median_Ed0, std_Ed0 = bootstrap_fit_klu_depth(new_Ed, Speed, n_iterations=100, fit_method='iterative')
         result = Function_KD.fit_klu(new_Ed,  fit_method='iterative', wl_interp_method='None', smooth_method='None',  only_continuous_obs=False)
         result_Kd = result['Kl']
+        SE_Kd = result['Luf_sd']/np.sqrt(result['data_count'])
         if ~(np.isnan(median_luf_kd)).all():
             result_Kd = result_Kd.mask(result_Kd < 0, np.nan)
-            median_luf_depth, std_luf_depth = bootstrap_speed_depth(new_Ed, Speed, n_iterations=100)
             # Calculate uncertainties
-            Kd_uncertainty = (std_luf_kd/10 ** 2 + std_luf_depth/10 ** 2) ** 0.5 # Take standard error = std/sqt(100)
+            Kd_uncertainty = std_luf_kd/np.sqrt(100)  # Take standard error = std/sqt(100)
         else:
             Kd_uncertainty = pd.Series([np.nan] * len(wavelengths))
             std_Ed0 = pd.Series([np.nan] * len(wavelengths))
@@ -763,8 +643,10 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             'quality': Ed_profile['quality'][0]
         }
 
-        data_dict_K.update(dict(zip(Kd.columns[5: len(wavelengths) +5],result_Kd)))
+        data_dict_K.update(dict(zip(Kd.columns[6: len(wavelengths) +6],result_Kd)))
         data_dict_K.update(dict(zip(Kd.columns[len(wavelengths) +6: len(wavelengths)*2 +6], Kd_uncertainty.values.reshape(-1).astype(np.float32))))
+        data_dict_K.update(dict(zip(Kd.columns[len(wavelengths)*2 +6: len(wavelengths)*3 +6],SE_Kd)))
+        data_dict_K.update(dict(zip(Kd.columns[len(wavelengths)*3 +6 : len(wavelengths)*4 +6], result['data_count'])))
 
         data_Kd.append(data_dict_K)
 
@@ -778,7 +660,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         }
 
         data_dict.update(dict(zip(Ed0.columns[5: len(wavelengths) +5], median_Ed0)))
-
         data_dict.update(dict(zip(Ed0.columns[len(wavelengths) + 6: len(wavelengths) * 2 + 6],
                                     std_Ed0.values.reshape(-1).astype(np.float32))))
 
@@ -790,11 +671,11 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         Ed_profile = Ed_profile[columns]
 
         #Create the .csv file
-        fileN ='PVST_VDIUP_'+ wmo + '_' + current_cycle + '_Ed' +'_R0'
+        fileN ='PVST_VDIUP-Argo-Kd_'+ wmo + '_' + current_cycle + '_Ed' +'_R0'
         path = os.path.join(Processed_profiles, wmo )
        # Ed_profile.to_csv(os.path.join(path, fileN +'.csv'), index=False)
         #Create the .sb file
-        sb.format_to_seabass(Ed_profile, metadata, fileN, path, comments, missing_value_placeholder= '-9999', delimiter= 'comma')
+        # sb.format_to_seabass(Ed_profile, metadata, fileN, path, comments, missing_value_placeholder= '-9999', delimiter= 'comma')
 
         Ed_with_station = Ed_profile.copy()
         Ed_with_station['profile'] = current_cycle
@@ -841,15 +722,22 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
          #   Kd = Kd.round(4)
             Kd.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Kd.csv'), index=False)
             print(f'Kd file for float {wmo} was created')
-            sb.format_to_seabass(Kd, metadata, 'PVST_VDIUP_'+ wmo + '_Kd_R0', path, comments, missing_value_placeholder='-9999', delimiter='comma')
-
+                 # Group the Kd DataFrame by month
+            Kd['year_month'] = pd.to_datetime(Kd['date']).dt.strftime('%Y%m')
+            # Iterate over each group and create a SeaBASS file
+            for year_month, group in Kd.groupby('year_month'):
+                group = group.drop(columns=['year_month'])
+                sb.format_to_seabass(group, metadata, f'PVST_VDIUP-Argo-Kd_{wmo}_{year_month}_Kd_R0', path, comments,
+                                     missing_value_placeholder='-9999', delimiter='comma')
             Ed0.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed0.csv'), index=False)
             print(f'Ed0 file for float {wmo} was created')
             Ed_physic.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed.csv'), index=False)
             print(f'Ed file for float {wmo} was created')
 
+            # Filter out columns in Kd that contain '_se' or '_bincount'
+
             plot_ed_profiles(df=Ed_physic, wmo=wmo, kd_df=Kd, wv_target=[490, 555, 660], wv_og=wavelengths, ed0=Ed0,flags_df = flags_df,
-                     depth_col='depth')
+                      depth_col='depth')
 
 # %% QUALITY CONTROL OF ALL KD PROFILES FROM A SINGLE FLOAT
 

@@ -12,8 +12,7 @@ from scipy.optimize import curve_fit
 def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='triangular', only_continuous_obs=True):
     """
     Compute diffuse attenuation coefficient (KL) and extrapolate Lu to surface
-
-    :param df: DataFrame containing datetime, depth, and Lu(lambda)
+    :param df: DataFrame containing datetime, depth, bin_counts, and Lu(lambda)
     :param fit_method: Method to fit Kl:
         + Standard: ordinary least-squares fit (very fast)
         + Semi-Robust: two-step ordinary least-squares fit, fit, remove residual, and refit (fast)
@@ -42,8 +41,8 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
     wavelengths = [float(col[2:]) for col in df.columns if col.startswith(('ed', 'LU'))]
     if np.isnan(wavelengths).any():
         raise ValueError("wavelengths array contains NaN values")
-    # Initialize the result DataFrame with NaN values
-    result = pd.DataFrame(np.full((len(wavelengths), 3), np.nan), columns=['Luf', 'Luf_sd', 'Kl'])
+    # Initialize output
+    result = pd.DataFrame(np.full((len(wavelengths), 4), np.nan), columns=['Luf', 'Luf_sd', 'Kl', 'data_count'])
 
     # Remove values where z is above water
     mask = df['depth'] >= 0 | np.isnan(df['depth'])
@@ -85,7 +84,7 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
     lu = df.loc[:idx_end, lu_columns][row_sel]
 
     # Keep only data above detection limit
-    lu = lu.loc[:, col_sel].astype(float)  # Makes copy to 64bit (typically in 32bit) Require copy as edit data in
+    lu = lu.loc[:, col_sel].astype(float)
     # Replace 0 by minimum value from instrument to prevent log to blow to infinity and replace negative value with 0
     lu[lu <= 0] = 1e-6
     # Replace infinite values with NaN
@@ -166,6 +165,11 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
             valid_mask = ~np.isnan(lu_log.iloc[:, wli])
             z_valid = z[valid_mask]
             lu_log_valid = lu_log[valid_mask].iloc[:,wli]
+
+            wk_sel_positions = [i for i, x in enumerate(wk_sel) if x]
+            # Store the count of non-NaN data points
+            result.iloc[wk_sel_positions[wli], result.columns.get_loc('data_count')] = len(lu_log_valid)
+
             if len(z_valid) < 10 or len(lu_log_valid) < 10 :
                 continue
             zpd_history[1:] = float('nan')
@@ -186,7 +190,6 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
                 if i > 5 and zpd[wli] > zpd_history[i - 1]:
                     # Break if after n/2 iteration the zpd keep increasing
                     #       main reason is that the iterative process is mostly used in the red where zpd is small
-                    #       and for HyperNav we only use upper 10 meters anyways to compute K
                     zpd[wli] = zpd_history[i - 1]  # reverse to smaller zpd
                     break
                 seln = z_valid < zpd[wli]
@@ -196,6 +199,7 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
                 zpd_history[i] = zpd[wli]
             else:
                 logger.debug(f'Fit max iteration reached (zpd={float(zpd[wli]):.1f}).')
+
         result.loc[wk_sel, 'Luf'] = np.exp(c[1, :])
         result.loc[wk_sel, 'Kl'] = -c[0, :]
     else:

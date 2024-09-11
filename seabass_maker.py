@@ -1,9 +1,8 @@
-import pandas as pd
-import numpy as np
 import re
 import pandas as pd
 import numpy as np
 import os
+import datetime
 
 def format_to_seabass(data, metadata, filename, path, comments=None, missing_value_placeholder='-9999',
                       delimiter='comma'):
@@ -126,6 +125,7 @@ def format_to_seabass(data, metadata, filename, path, comments=None, missing_val
             'kd': '1/m',
             'ed': 'uW/cm^2/nm',
             'Epar': 'uE/cm^2/s',
+            'bincount' : 'none',
         }
 
         formatt = {
@@ -147,13 +147,18 @@ def format_to_seabass(data, metadata, filename, path, comments=None, missing_val
 
         units_list = []
         for col in data.columns:
-            if any(key in col for key in ['quality', 'kd', 'ed', 'Epar', 'depth', 'wt', 'sal', 'tilt']):
+            if 'kd' in col and 'bincount' in col:
+                units_list.append('none')
+            elif 'kd' in col:
+                units_list.append('1/m')
+            else:
                 for key, unit in units_dict.items():
                     if key in col:
                         units_list.append(unit)
                         break
-            else:
-                units_list.append(units_dict.get(col, 'none'))
+                else:
+                    units_list.append('none')
+
 
         # Convert column names and units list to strings
         fields_str = ','.join(map(str, data.columns))
