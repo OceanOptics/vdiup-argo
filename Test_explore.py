@@ -352,9 +352,8 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         print(f"No calibration file found for rad='Ed' and wmo={wmo}")
         continue
 
-    comments = [
-        'These data were collected and made freely available by the International Argo Program and the national programs ',
-        'that contribute to it (https://argo.ucsd.edu, https://www.ocean-ops.org). The Argo Program is part of the ',
+    comments = ['These data were collected and made freely available by the International Argo Program and the national programs',
+        'that contribute to it (https://argo.ucsd.edu, https://www.ocean-ops.org). The Argo Program is part of the',
         'Global Ocean Observing System https://doi.org/10.17882/42182.',
         f'Link to BGC-Argo GDAC for raw float data: https://data-argo.ifremer.fr/aux/coriolis/{wmo}.',
         'Quality Flag relates to the overall radiometric quality control based on Organelli et al., 2016 (DOI: 10.1175/JTECH-D-15-0193.1).',
@@ -363,11 +362,8 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         '    0. Good: >50% of wavelengths passed individual QC.',
         '    1. Questionable: >50% of wavelengths are questionable following individual QC or >5% of wavelengths flagged as Bad.',
         '    2. Bad: >50% of wavelengths are bad following individual QC.',
-        ' 100 bootstrap iterations were performed to estimate the uncertainty field.',
-        'This wavelength-specific uncertainty encompasses the uncertainty in fitting the Kd profile (sub-selection of 80% of wavelength),'
-        ' and the uncertainty in the depth of the measurement (addition of a fuzz factor centered at 0).',
-        'Details on the uncertainty computation can be found in the documentation.',
-    ]
+        'Uncertainties (_unc) are computed with a bootstrap technique and encompass uncertainty in fitting Kd to the profile and depth uncertainty. Details available in documentation.',
+        'Details on the uncertainty computation can be found in the documentation.']
 
     # Define metadata for the SeaBASS file
     metadata = {
@@ -727,7 +723,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             # Iterate over each group and create a SeaBASS file
             for year_month, group in Kd.groupby('year_month'):
                 group = group.drop(columns=['year_month'])
-                sb.format_to_seabass(group, metadata, f'PVST_VDIUP-Argo-Kd_{wmo}_{year_month}_Kd_R0', path, comments,
+                sb.format_to_seabass(group, metadata, f'PVST_VDIUP-Argo-Kd_{wmo}_{year_month}_R0', path, comments,
                                      missing_value_placeholder='-9999', delimiter='comma')
             Ed0.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed0.csv'), index=False)
             print(f'Ed0 file for float {wmo} was created')
