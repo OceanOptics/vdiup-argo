@@ -7,7 +7,7 @@ import pandas as pd
 import xarray as xr
 import seabass_maker as sb
 sys.path.append('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve')
-import Toolbox_RAMSES as tools
+import Toolbox_RAMSESv2 as tools
 import matplotlib.pyplot as plt
 import Function_KD
 import gsw
@@ -43,6 +43,7 @@ for number in list_wmo:
     print(command)
 
     subprocess.run(command_general, shell=True)
+    subprocess.run(command, shell=True)
 
 # http://www.argodatamgt.org/Access-to-data/Argo-GDAC-ftp-https-and-s3-servers
 
@@ -240,7 +241,7 @@ def plot_ed_profiles(df, wmo, kd_df, wv_target, wv_og, ed0, flags_df, depth_col=
         else:
             print(f"Figure already exists at {figure_path}")
 # Bootstrapping function
-def bootstrap_fit_klu_depth(df, Speed, n_iterations=100, fit_method='iterative'):
+def bootstrap_fit_klu_depth(df, Speed, n_iterations=10, fit_method='iterative'):
     bootstrap_results = []
     bootstrap_Ed0 = []
     random_numbers = np.random.normal(loc=0, scale=1, size=n_iterations)
@@ -308,9 +309,9 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         Ed_physic = pd.read_csv(os.path.join(Processed_profiles, wmo, (wmo + '_Ed.csv')))
         Lu_physic = pd.DataFrame()
     except (FileNotFoundError, pd.errors.EmptyDataError):
-        Ed_physic = pd.DataFrame()
-        print(f'Retrieval failed for float {wmo} Ed. Creating new dataframe...')
 
+        print(f'Retrieval failed for float {wmo} Ed. Creating new dataframe...')
+        Ed_physic = pd.DataFrame()
     try:
         Kd = pd.read_csv(os.path.join(Processed_profiles, wmo, (wmo + '_Kd.csv')))
     except (FileNotFoundError, pd.errors.EmptyDataError):
@@ -362,8 +363,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         '    0. Good: >50% of wavelengths passed individual QC.',
         '    1. Questionable: >50% of wavelengths are questionable following individual QC or >5% of wavelengths flagged as Bad.',
         '    2. Bad: >50% of wavelengths are bad following individual QC.',
-        'Uncertainties (_unc) are computed with a bootstrap technique and encompass uncertainty in fitting Kd to the profile and depth uncertainty. Details available in documentation.',
-        'Details on the uncertainty computation can be found in the documentation.']
+        'Uncertainties (_unc) are computed with a bootstrap technique and encompass uncertainty in fitting Kd to the profile and depth uncertainty. Details available in documentation.']
 
     # Define metadata for the SeaBASS file
     metadata = {
@@ -386,9 +386,9 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
     for idx, filename in enumerate(sorted(glob.glob(os.path.join(root, wmo, 'profiles', '*_aux.nc')))):
 
         current_cycle = re.search(r"_([0-9]+).*_aux\.nc$", filename).group(1)
-        if current_cycle in processed_cycles and int(current_cycle) in Kd['profile'].values and int(current_cycle) in Ed_physic['profile']:
-            print(f'Profile {current_cycle} already processed for float {wmo}. Skipping...')
-            continue
+        # if current_cycle in processed_cycles and int(current_cycle) in Kd['profile'].values and int(current_cycle) in Ed_physic['profile']:
+        #     print(f'Profile {current_cycle} already processed for float {wmo}. Skipping...')
+        #     continue
 
         if '001D' in filename:
             print('Dark file, skipping') # Skip the file if it is a dark file
@@ -412,7 +412,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         lu_n_prof = np.argwhere(
             data.STATION_PARAMETERS.values == b'RAW_UPWELLING_RADIANCE                                          ')
 
-        if not len(ed_n_prof) > 0 and len(lu_n_prof) > 0:
+        if not len(ed_n_prof) > 0:
             print('skip')
             continue
 
@@ -430,9 +430,15 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         if len(lu_n_prof) == 0 or skip_lu == True:
             Ed_n_prof = ed_n_prof[0][0]
             try:
-                 Ed_physic_profile = tools.format_ramses_ed_only( filename, meta_filename, cals[(cals['rad'] == 'Ed') &
-                                                                                   (cals['wmo'] == wmo)]['calibration_file'].iloc[0], Ed_n_prof)
-
+                if '1903578' in filename:
+                    Ed_physic_profile = tools.format_ramses_ed_only(filename, meta_filename,
+                                                                    cals[(cals['rad'] == 'Ed') & (cals['wmo'] == wmo)][
+                                                                        'calibration_file'].iloc[0], Ed_n_prof,
+                                                                    PixelStop=144)
+                else:
+                    Ed_physic_profile = tools.format_ramses_ed_only(filename, meta_filename,
+                                                                    cals[(cals['rad'] == 'Ed') & (cals['wmo'] == wmo)][
+                                                                        'calibration_file'].iloc[0], Ed_n_prof)
             except ValueError:
                 print('Could not format Ed profile from counts, skipping')
                 continue
@@ -585,6 +591,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
        # flag_idx = df_flags.isin([2])  # Omit rows with flags 2 (BAD)
 
         new_Ed = Ed_profile.loc[:,['date','time', 'depth'] + lu_columns].copy()
+     #   Ed_robert = Ed_profile.loc[:, ['date', 'time', 'depth', 'lat', 'lon'] + lu_columns].copy()
 
         # Iterate over each wavelength column in new_Ed
         for wavelength, column in zip(wavelengths, lu_columns):
@@ -592,6 +599,12 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             flags = df_flags[wavelength]
             # Replace the values in new_Ed where the flag is 2 with np.nan
             new_Ed.loc[flags[flags == 2].index, column] = np.nan
+            # Ed_robert.loc[flags[flags == 2].index, column] = np.nan
+        # Addition for Robert
+
+        fileN = 'Ed_Argo_Hyperspectral_' + wmo + '_' + current_cycle
+        path = os.path.join(Processed_profiles, wmo)
+    #    Ed_robert.to_csv(os.path.join(path, fileN + '.csv'), index=False, na_rep='NaN')
 
         # Add to global table of the float
         new_column_names = ["kd" + str(wavelength) for wavelength in wavelengths]
@@ -618,7 +631,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
 
      # Calculate the median and standard deviation across the bootstrap samples
-        median_luf_kd, std_luf_kd, median_Ed0, std_Ed0 = bootstrap_fit_klu_depth(new_Ed, Speed, n_iterations=100, fit_method='iterative')
+        median_luf_kd, std_luf_kd, median_Ed0, std_Ed0 = bootstrap_fit_klu_depth(new_Ed, Speed, n_iterations=10, fit_method='iterative')
         result = Function_KD.fit_klu(new_Ed,  fit_method='iterative', wl_interp_method='None', smooth_method='None',  only_continuous_obs=False)
         result_Kd = result['Kl']
         SE_Kd = result['Luf_sd']/np.sqrt(result['data_count'])
@@ -667,10 +680,10 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         Ed_profile = Ed_profile[columns]
 
         #Create the .csv file
-        fileN ='PVST_VDIUP-Argo-Kd_'+ wmo + '_' + current_cycle + '_Ed' +'_R0'
+        # fileN ='PVST_VDIUP-Argo-Kd_'+ wmo + '_' + current_cycle + '_Ed' +'_raw'
         path = os.path.join(Processed_profiles, wmo )
-       # Ed_profile.to_csv(os.path.join(path, fileN +'.csv'), index=False)
-        #Create the .sb file
+        # Ed_profile.to_csv(os.path.join(path, fileN +'_raw.csv'), index=False)
+        # #Create the .sb file
         # sb.format_to_seabass(Ed_profile, metadata, fileN, path, comments, missing_value_placeholder= '-9999', delimiter= 'comma')
 
         Ed_with_station = Ed_profile.copy()
@@ -719,21 +732,20 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             Kd.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Kd.csv'), index=False)
             print(f'Kd file for float {wmo} was created')
                  # Group the Kd DataFrame by month
-            Kd['year_month'] = pd.to_datetime(Kd['date']).dt.strftime('%Y%m')
-            # Iterate over each group and create a SeaBASS file
-            for year_month, group in Kd.groupby('year_month'):
-                group = group.drop(columns=['year_month'])
-                sb.format_to_seabass(group, metadata, f'PVST_VDIUP-Argo-Kd_{wmo}_{year_month}_R0', path, comments,
-                                     missing_value_placeholder='-9999', delimiter='comma')
-            Ed0.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed0.csv'), index=False)
+            # Kd['year_month'] = pd.to_datetime(Kd['date']).dt.strftime('%Y%m')
+            # # Iterate over each group and create a SeaBASS file
+            # for year_month, group in Kd.groupby('year_month'):
+            #     group = group.drop(columns=['year_month'])
+            #     sb.format_to_seabass(group, metadata, f'PVST_VDIUP-Argo-Kd_{wmo}_{year_month}_R0', path, comments,
+            #                          missing_value_placeholder='-9999', delimiter='comma')
+            # Ed0.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed0.csv'), index=False)
             print(f'Ed0 file for float {wmo} was created')
             Ed_physic.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed.csv'), index=False)
             print(f'Ed file for float {wmo} was created')
 
-            # Filter out columns in Kd that contain '_se' or '_bincount'
-
+    # Filter out columns in Kd that contain '_se' or '_bincount'
             plot_ed_profiles(df=Ed_physic, wmo=wmo, kd_df=Kd, wv_target=[490, 555, 660], wv_og=wavelengths, ed0=Ed0,flags_df = flags_df,
-                      depth_col='depth')
+                   depth_col='depth')
 
 # %% QUALITY CONTROL OF ALL KD PROFILES FROM A SINGLE FLOAT
 

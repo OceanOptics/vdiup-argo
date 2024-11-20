@@ -63,7 +63,7 @@ def format_to_seabass(data, metadata, filename, path, comments=None, missing_val
             comments.append('tilt = post-tilt, i.e. tilt of the instrument just after performing a radiometric measurement.')
             metadata.pop('measurement_depth', None)
 
-    elif '_Kd' in filename:
+    elif '-Kd' in filename:
         metadata['measurement_depth'] = 0
         metadata.pop('profile', None)
         metadata.pop('below_detection_limit',None)
