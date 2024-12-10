@@ -246,6 +246,7 @@ def bootstrap_fit_klu_depth(df, Speed, n_iterations=10, fit_method='iterative'):
     bootstrap_Ed0 = []
     random_numbers = np.random.normal(loc=0, scale=1, size=n_iterations)
 
+
     for i in range(n_iterations):
         # Resample the DataFrame with replacement
         df_resampled = df.copy()
@@ -286,6 +287,21 @@ def bootstrap_fit_klu_depth(df, Speed, n_iterations=10, fit_method='iterative'):
         std_luf_kd = bootstrap_results_df.std()
 
     return median_luf_kd, std_luf_kd, median_ed0, std_ed0
+# Function to find the closest wavelength
+
+# Function to find the closest wavelengths
+def find_closest_wavelengths(targets, available_wavelengths):
+    closest_wavelengths = []
+    for target in targets:
+        closest = min(available_wavelengths, key=lambda x: abs(x - target))
+        closest_wavelengths.append(closest)
+    return closest_wavelengths
+
+Check_5wv =[]
+combined_QC_5wv = pd.DataFrame()
+
+# Define the target wavelengths
+target_qc_wavelengths = [380, 443, 490, 550, 620]
 
 for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
@@ -386,9 +402,9 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
     for idx, filename in enumerate(sorted(glob.glob(os.path.join(root, wmo, 'profiles', '*_aux.nc')))):
 
         current_cycle = re.search(r"_([0-9]+).*_aux\.nc$", filename).group(1)
-        # if current_cycle in processed_cycles and int(current_cycle) in Kd['profile'].values and int(current_cycle) in Ed_physic['profile']:
-        #     print(f'Profile {current_cycle} already processed for float {wmo}. Skipping...')
-        #     continue
+         # if current_cycle in processed_cycles and int(current_cycle) in Kd['profile'].values and int(current_cycle) in Ed_physic['profile']:
+         #     print(f'Profile {current_cycle} already processed for float {wmo}. Skipping...')
+         #     continue
 
         if '001D' in filename:
             print('Dark file, skipping') # Skip the file if it is a dark file
@@ -524,8 +540,12 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
                                                           lon=Ed_profile.lon[0],qc_wls=wavelengths , step2_r2=0.995, step3_r2=0.997,
                                                           step3_r3=0.999, skip_meta_tests=False, skip_dark_test=True)
 
-        # Plot ed487.0 as a function of depth
+        qc_5wv = find_closest_wavelengths(target_qc_wavelengths, wavelengths)
+        results_5wv = Organelli_QC.organelli16_qc(Ed_profile, lat=Ed_profile.lat[0],
+                                              lon=Ed_profile.lon[0], qc_wls=qc_5wv, step2_r2=0.995, step3_r2=0.997,
+                                              step3_r3=0.999, skip_meta_tests=False, skip_dark_test=True)
 
+        # Plot ed487.0 as a function of depth
         df_flags = pd.DataFrame(columns=wavelengths, index=range(len(Ed_profile)))
         df_results = pd.DataFrame({
             'global_flag': [np.nan],
@@ -556,6 +576,50 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             df_results = pd.concat([df_results, new_row], ignore_index=True)
             df_results = df_results.dropna(how='all').reset_index(drop=True)
 
+        df_flags_5wv = pd.DataFrame(columns=qc_5wv, index=range(len(Ed_profile)))
+        df_results_5wv = pd.DataFrame({
+            'global_flag': [np.nan],
+            'status': [np.nan],
+            'polynomial_fit': [np.nan],
+            'wavelength': [np.nan]
+        })
+
+        # Process results_5wv
+        for result in results_5wv:
+            # Extract the wavelength and flags
+            global_flag, flags, status, polynomial_fit, wv = result
+            if len(flags) < len(df_flags_5wv):
+                # Create a new array filled with NaN of the same length as df_flags
+                new_flags = np.full(len(df_flags_5wv), 2)
+                # Fill the top of this array with the flags data
+                new_flags[:len(flags)] = flags
+            else:
+                new_flags = flags
+            # Assign the new_flags array to the appropriate column in df_flags
+            df_flags_5wv[wv] = new_flags
+            # Add these values as a new row to the DataFrame
+            new_row = pd.DataFrame({
+                'global_flag': [global_flag],
+                'status': [status],
+                'polynomial_fit': [polynomial_fit],
+                'wavelength': [wv]
+            })
+            df_results_5wv = pd.concat([df_results_5wv, new_row], ignore_index=True)
+            df_results_5wv = df_results_5wv.dropna(how='all').reset_index(drop=True)
+
+        # Ensure all target wavelengths are present in df_results_5wv
+        global_flags_5 = df_results_5wv.set_index('wavelength')['global_flag'].reindex(qc_5wv, fill_value=2).values
+        # Create a DataFrame with the required columns
+        temp_df = pd.DataFrame({
+            'wmo': [wmo] ,
+            'current_cycle': current_cycle,
+            'wv_1': global_flags_5[0],
+            'wv_2': global_flags_5[1],
+            'wv_3': global_flags_5[2],
+            'wv_4': global_flags_5[3],
+            'wv_5': global_flags_5[4]
+        })
+        combined_QC_5wv = pd.concat([combined_QC_5wv, temp_df], ignore_index=True)
 
         data_dict_flags = {
             'depth': Ed_profile['depth'].values,
@@ -579,6 +643,44 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         else:
             Ed_profile['quality'] = 0
             print(f"Cycle {current_cycle} passes QC for more than 50% of wavelength: PASSED")
+
+##### Redo quality control for the 5 wavelengths
+
+        # Count the occurrences of each global_flag
+        flag_counts = df_results_5wv['global_flag'].value_counts()
+
+        # Initialize the counts for each flag
+        count_0 = flag_counts.get(0, 0)
+        count_1 = flag_counts.get(1, 0)
+        count_2 = flag_counts.get(2, 0)
+
+        conditions = {
+            (5, 0, 0): (0, "PASSED"),
+            (4, 1, 0): (0, "PASSED"),
+            (4, 0, 1): (1, "PASSED"),
+            (3, 1, 1): (1, "QUESTIONABLE"),
+            (3, 2, 0): (1, "QUESTIONABLE"),
+            (3, 0, 2): (2, "BAD"),
+            (2, 3, 0): (1, "QUESTIONABLE"),
+            (2, 2, 1): (2, "QUESTIONABLE"),
+            (2, 1, 2): (2, "BAD"),
+            (2, 0, 3): (2, "BAD"),
+            (1, 4, 0): (1, "QUESTIONABLE"),
+            (1, 3, 1): (1, "QUESTIONABLE"),
+            (1, 2, 2): (2, "BAD"),
+            (1, 1, 3): (2, "BAD"),
+            (1, 0, 4): (2, "BAD"),
+            (0, 5, 0): (2, "BAD"),
+            (0, 4, 1): (2, "BAD"),
+            (0, 3, 2): (2, "BAD"),
+            (0, 2, 3): (2, "BAD"),
+            (0, 1, 4): (2, "BAD"),
+            (0, 0, 5): (2, "BAD")
+        }
+
+        # Determine the quality based on the specified conditions
+        quality_5wv, message = conditions.get((count_0, count_1, count_2), (1, "QUESTIONABLE"))
+        Check_5wv.append({'wmo': wmo, 'cycle_number': current_cycle, 'quality_5wv': quality_5wv})
 
         for col in wavelengths:
             Ed_profile.rename(columns={col: 'ed' + str(col)}, inplace=True)
@@ -747,6 +849,11 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             plot_ed_profiles(df=Ed_physic, wmo=wmo, kd_df=Kd, wv_target=[490, 555, 660], wv_og=wavelengths, ed0=Ed0,flags_df = flags_df,
                    depth_col='depth')
 
+QC_5wv = pd.DataFrame(Check_5wv)
+
+# SAve to csv
+QC_5wv.to_csv(os.path.join(Processed_profiles, 'QC_5wv.csv'), index=False)
+combined_QC_5wv.to_csv(os.path.join(Processed_profiles, 'combined_QC_5wv.csv'), index=False)
 # %% QUALITY CONTROL OF ALL KD PROFILES FROM A SINGLE FLOAT
 
 # Load the Kd profiles
