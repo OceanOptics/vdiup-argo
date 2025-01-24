@@ -5,8 +5,6 @@ import sys
 import numpy as np
 import pandas as pd
 import xarray as xr
-
-import QC_Different_Depths
 import seabass_maker as sb
 sys.path.append('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve')
 import Toolbox_RAMSESv2 as tools
@@ -18,7 +16,7 @@ import matplotlib.gridspec as gridspec
 import subprocess
 import QC_Different_Depths
 root = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve'
-Processed_profiles = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/Outputs'
+Processed_profiles = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/Outputs_5_QC'
 
 
 # %% Download all the profiles from the floats from the GDAC
@@ -360,11 +358,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
     meta_filename = os.path.join(root, wmo, f'{wmo}_meta_aux.nc')
 
-    # Set the maximum number of iterations
-    # max_iterations = 15
-    # # Loop counter
-    # iteration_count = 0
-
     # Check if the calibration file exists for the given wmo and Ed
     if  cals[(cals['rad'] == 'Ed') & (cals['wmo'] == wmo)].empty:
         print(f"No calibration file found for rad='Ed' and wmo={wmo}")
@@ -405,13 +398,9 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
     for idx, filename in enumerate(sorted(glob.glob(os.path.join(root, wmo, 'profiles', '*_aux.nc')))):
 
         current_cycle = re.search(r"_([0-9]+).*_aux\.nc$", filename).group(1)
-        if current_cycle in processed_cycles and int(current_cycle) in Kd['profile'].values and int(current_cycle) in Ed_physic['profile']:
-             print(f'Profile {current_cycle} already processed for float {wmo}. Skipping...')
-             continue
-
-        if int(current_cycle) < 13 and wmo == '4903660':
-            print(f'Skipping WMO {wmo} as current_cycle is {current_cycle} or below')
-            continue
+        # if current_cycle in processed_cycles and int(current_cycle) in Kd['profile'].values and int(current_cycle) in Ed_physic['profile']:
+        #      print(f'Profile {current_cycle} already processed for float {wmo}. Skipping...')
+        #      continue
 
         if '001D' in filename:
             print('Dark file, skipping') # Skip the file if it is a dark file
@@ -437,8 +426,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             ed_n_prof = np.argwhere(
                 data.PARAMETER.values == b'RAW_DOWNWELLING_IRRADIANCE                                      ')
 
-        lu_n_prof = np.argwhere(
-             data.STATION_PARAMETERS.values == b'RAW_UPWELLING_RADIANCE                                          ')
 
         if not len(ed_n_prof) > 0:
             print('skip')
@@ -455,7 +442,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
         skip_lu = True
 
-        if len(lu_n_prof) == 0 or skip_lu == True:
+        if  skip_lu == True:
             Ed_n_prof = ed_n_prof[0][0]
             try:
                 if '1903578' in filename:
@@ -476,11 +463,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             except ValueError:
                 print('Could not format Ed profile from counts, skipping')
                 continue
-        else:
-            Ed_n_prof, Lu_n_prof = ed_n_prof[0][0], lu_n_prof[0][0]
-            Ed_physic_profile, Lu_physic_profile = tools.format_ramses(
-                filename, meta_filename, cals[(cals['rad'] == 'Ed') & (cals['wmo'] == wmo)]['calibration_file'].iloc[0],
-                cals[(cals['rad'] == 'Lu') & (cals['wmo'] == wmo)]['calibration_file'].iloc[0], Ed_n_prof, Lu_n_prof)
 
         columns_to_check = [col for col in Ed_physic_profile.columns if col not in ['tilt', 'tilt_1id']]
         if Ed_physic_profile[columns_to_check].map(lambda x: pd.isna(x) or np.isinf(x)).all().all():
@@ -535,11 +517,8 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         metadata_ed['wt'] = interp_temp
         metadata_ed['sal'] = interp_psal
 
-       # metadata_ed['MLD'] = zmld_boyer(metadata_ed.sal, metadata_ed.wt, metadata_ed.depth)[1]
-
         # Concatenate
         Ed_profile = pd.concat([metadata_ed, Ed_physic_profile], axis=1)
-
 
         # Extract wavelength to format for Kd function and rename columns
         wavelengths = [col for col in Ed_profile.columns if isinstance(col, (int, float))]
@@ -614,6 +593,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         # global_flags['wmo_cycle'] = f"{wmo}_{current_cycle}"
         #
         # results_df = pd.concat([results_df, pd.DataFrame([global_flags])], ignore_index=True)
+
 
         # Plot ed487.0 as a function of depth
         df_flags = pd.DataFrame(columns=wavelengths, index=range(len(Ed_profile)))
@@ -702,18 +682,18 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         data_flags = pd.concat([data_flags, pd.DataFrame(data_dict_flags)], ignore_index=True)
 
         df_results_filtered = df_results[df_results['wavelength'] < 600]
-        if (df_results_filtered['global_flag'] == 2).sum() / len(df_results_filtered) > 0.5 :
+        if ((df_results_filtered['global_flag'] == 2).sum() / len(df_results_filtered) >= 0.8  or
+            (df_results_filtered['global_flag'] == 1).sum() / len(df_results_filtered) == 1) :
             Ed_profile['quality'] = 2 #
-            print(f"Cycle {current_cycle} fails QC for more than 50% of wavelength: Careful proceeding : BAD")
+            print(f"Cycle {current_cycle} fails QC for more than 80% of wavelength or all are questionnable: Careful proceeding : BAD")
 
-        elif ((df_results_filtered['global_flag'] == 1).sum() / len(df_results_filtered) > 0.5  or
-              (df_results_filtered['global_flag'] == 2).sum() / len(df_results_filtered) > 0.05) :
-            print(f"Cycle {current_cycle} questionable QC for more than 50% of wavelength or 5% bad :QUESTIONABLE")
-            Ed_profile['quality'] = 1
+        elif ((df_results_filtered['global_flag'] == 0).sum() / len(df_results_filtered) >= 0.8):
+            Ed_profile['quality'] =0 # GOOD
+            print(f"Cycle {current_cycle} passes QC for more than 80% of wavelength: GOOD")
 
         else:
-            Ed_profile['quality'] = 0
-            print(f"Cycle {current_cycle} passes QC for more than 50% of wavelength: PASSED")
+            Ed_profile['quality'] = 1
+            print(f"Cycle {current_cycle} : Questionnable QC results")
 
 ##### Redo quality control for the 5 wavelengths
 
@@ -761,10 +741,8 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         lu_columns = [col for col in Ed_profile.columns if col.startswith(('ed', 'lu'))]
 
         ###### Create Kd document ######
-       # flag_idx = df_flags.isin([2])  # Omit rows with flags 2 (BAD)
 
         new_Ed = Ed_profile.loc[:,['date','time', 'depth'] + lu_columns].copy()
-     #   Ed_robert = Ed_profile.loc[:, ['date', 'time', 'depth', 'lat', 'lon'] + lu_columns].copy()
 
         # Iterate over each wavelength column in new_Ed
         for wavelength, column in zip(wavelengths, lu_columns):
@@ -772,12 +750,9 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             flags = df_flags[wavelength]
             # Replace the values in new_Ed where the flag is 2 with np.nan
             new_Ed.loc[flags[flags == 2].index, column] = np.nan
-            # Ed_robert.loc[flags[flags == 2].index, column] = np.nan
-        # Addition for Robert
 
         fileN = 'Ed_Argo_Hyperspectral_' + wmo + '_' + current_cycle
         path = os.path.join(Processed_profiles, wmo)
-    #    Ed_robert.to_csv(os.path.join(path, fileN + '.csv'), index=False, na_rep='NaN')
 
         # Add to global table of the float
         new_column_names = ["kd" + str(wavelength) for wavelength in wavelengths]
@@ -804,7 +779,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
 
      # Calculate the median and standard deviation across the bootstrap samples
-        median_luf_kd, std_luf_kd, median_Ed0, std_Ed0 = bootstrap_fit_klu_depth(new_Ed, Speed, n_iterations=10, fit_method='iterative')
+        median_luf_kd, std_luf_kd, median_Ed0, std_Ed0 = bootstrap_fit_klu_depth(new_Ed, Speed, n_iterations=100, fit_method='iterative')
         result = Function_KD.fit_klu(new_Ed,  fit_method='iterative', wl_interp_method='None', smooth_method='None',  only_continuous_obs=False)
         result_Kd = result['Kl']
         SE_Kd = result['Luf_sd']/np.sqrt(result['data_count'])

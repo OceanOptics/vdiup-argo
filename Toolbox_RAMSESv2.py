@@ -614,7 +614,7 @@ def format_ramses_ed_only(filename, metaname, calEd_name, Ed_n_prof, PixelBinnin
     Ed_physic_profile = pd.DataFrame(columns=np.round(Ed_wave))
     Ed_physic_profile.insert(0, 'Pres_float', Ed_raw_profile.Pres_float[~Ed_raw_profile.Pres_float.isna()])
     Ed_physic_profile.insert(0, 'tilt', Ed_raw_profile.tilt[~Ed_raw_profile.tilt.isna()])
-    Ed_physic_profile.insert(0, 'tilt_1id', Ed_raw_profile.tilt_1id[~Ed_raw_profile.tilt_id.isna()])
+    Ed_physic_profile.insert(0, 'tilt_1id', Ed_raw_profile.tilt_1id[~Ed_raw_profile.tilt_1id.isna()])
 
     # Fill the table with counts data converted
     for z in Ed_raw_profile.Pres_float[~Ed_raw_profile.Pres_float.isna()]:
