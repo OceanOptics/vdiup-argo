@@ -5,9 +5,10 @@ from sza_saa_grena import solar_zenith_and_azimuth_angle
 import unittest
 import pvlib
 from statsmodels.stats.diagnostic import lilliefors
-def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('nan'),
-                   qc_wls: list = [490], step2_r2: object = 0.995, step3_r2: object = 0.997,step3_r3:object = 0.999,
-                   skip_meta_tests: object = False, skip_dark_test: object = True) -> object:
+
+
+def organelli16_qc(df, lat=float('nan'), lon=float('nan'), qc_wls=[490], step2_r2=0.995, step3_r2=0.997, step3_r3=0.999,
+                   skip_meta_tests=False, skip_dark_test=True, associated_depths=None):
     """
     Quality control profile with Organelli et al. 2016
 
@@ -19,7 +20,8 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
     :param step3_r2: Squared Correlation coefficient for second test (default=0.998)
     :param skip_meta_tests: Skip metadata test (boolean)
     :param skip_dark_test: Skip dark test (boolean)
-    :return: (global_flag, local_flag, status,polynomial_fit, wavelength)
+    :param associated_depths: Dictionary with wavelengths as keys and associated depths as values (default=None)
+    :return: (global_flag, local_flag, status, polynomial_fit, wavelength)
         global_flag: 0,1,2: Overall profile QC for given wavelength
         local_flag: flag for each observation
             0. good: does not require modification to be used
@@ -35,21 +37,23 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
 
     for qc_wl in qc_wls:
         try:
-            if qc_wl > 600:
+            if associated_depths and qc_wl in associated_depths:
+                associated_depth = associated_depths[qc_wl]
+                df_filtered = df[df['depth'] <= associated_depth]
+            elif qc_wl > 600:
                 closest_to_zero = df.loc[df['depth'].idxmin()]
                 threshold_value = 0.01 * closest_to_zero[qc_wl]
-                associated_depth = 2 * df[df[qc_wl] >=  threshold_value]['depth'].max()
+                associated_depth = 2 * df[df[qc_wl] >= threshold_value]['depth'].max()
                 df_filtered = df[df['depth'] <= associated_depth]
                 step2_r2 = 0.95
-
             else:
                 df_filtered = df[df['depth'] <= 150]
-            
+
             good, questionable, bad = 0, 1, 2
-            flags = np.zeros(len(df_filtered), dtype=int) # Assume all good at beginning.
+            flags = np.zeros(len(df_filtered), dtype=int)  # Assume all good at beginning.
 
             # Extract wavelength to format for Kd function and rename columns
-            wl = [col for col in  df_filtered.columns if isinstance(col, (int, float))]
+            wl = [col for col in df_filtered.columns if isinstance(col, (int, float))]
             wl_int = [int(w) for w in wl]
             wli = wl_int[np.argmin(abs(np.array(wl_int) - qc_wl))]
             rad = df_filtered[wli]
@@ -70,20 +74,16 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
 
                     # Ignore non-monotonic rows for the rest of the code
                     rad[flag_noMono] = np.nan
-                    df_filtered.loc[flag_noMono,'depth'] = np.nan
+                    df_filtered.loc[flag_noMono, 'depth'] = np.nan
                     print(f"Non-monotonic values detected at rows {flag_noMono}")
 
             # Check Location
             if not (-90 <= lat <= 90 and -180 <= lon <= 360):
                 flags[:] = bad
-                results.append((2, flags, 'BAD: NO RES: INVALID_LOCATION', False,qc_wl))
+                results.append((2, flags, 'BAD: NO RES: INVALID_LOCATION', False, qc_wl))
                 continue
-                # Check Sun Elevation
-                # sun_elevation = solar_zenith_and_azimuth_angle(lon, lat, time_utc.to_pydatetime())
-                # if not 2 <= sun_elevation:
-                #     return False, flags, 'NIGHTTIME'
 
-            # # -- Step 1: Dark test --
+            # -- Step 1: Dark test --
             if not skip_dark_test:
                 # Find dark section of profile
                 i, converged = 0, True
@@ -99,13 +99,13 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
                 # Check valid number of observations
                 if i < 5:
                     flags[:] = bad
-                    results.append( (2, flags, 'TOO_FEW_OBS_DARK', False,qc_wl))
+                    results.append((2, flags, 'TOO_FEW_OBS_DARK', False, qc_wl))
                     continue
 
             # -- Step 2: Cloud signal --
             # Check fit quality
             pd.options.mode.chained_assignment = None
-            rad[rad <= 1e-6] = 1e-6 # Minimum value from the sensor
+            rad[rad <= 1e-6] = 1e-6  # Minimum value from the sensor
             sel = ~flags.astype(bool)
             log_rad = np.log(pd.to_numeric(rad[sel], errors='coerce'))
 
@@ -114,7 +114,7 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
             depth_valid = df_filtered.depth[sel][valid_indices]
             log_rad_valid = log_rad[valid_indices]
 
-            #  Fit polynomial
+            # Fit polynomial
             p = np.polyfit(depth_valid, log_rad_valid, 4)
             y = np.polyval(p, df_filtered.depth[sel])
 
@@ -129,12 +129,12 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
 
             if r2 < step2_r2:
                 flags[:] = bad
-                results.append( (2, flags, 'BAD: CLOUDY_PROFILE', False, qc_wl))
+                results.append((2, flags, 'BAD: CLOUDY_PROFILE', False, qc_wl))
                 continue
-             # Check valid number of observations
+            # Check valid number of observations
             if sum(~flags.astype(bool)) < 5:
                 flags[:] = bad
-                results.append((2, flags, 'BAD: TOO_FEW_OBS_CLOUDY', False,qc_wl))
+                results.append((2, flags, 'BAD: TOO_FEW_OBS_CLOUDY', False, qc_wl))
                 continue
 
             # -- Step 3: Wave focusing --
@@ -170,7 +170,7 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
 
             if sum(~flags.astype(bool)) < 5:
                 flags[:] = bad
-                results.append(( 2, flags, 'BAD: TOO_FEW_OBS_NOTFLAGGED', False, qc_wl))
+                results.append((2, flags, 'BAD: TOO_FEW_OBS_NOTFLAGGED', False, qc_wl))
                 continue
 
             if step3_r2 < r2 < step3_r3:

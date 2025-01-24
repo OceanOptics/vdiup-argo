@@ -5,6 +5,8 @@ import sys
 import numpy as np
 import pandas as pd
 import xarray as xr
+
+import QC_Different_Depths
 import seabass_maker as sb
 sys.path.append('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve')
 import Toolbox_RAMSESv2 as tools
@@ -14,7 +16,7 @@ import gsw
 import Organelli_QC
 import matplotlib.gridspec as gridspec
 import subprocess
-import datetime
+import QC_Different_Depths
 root = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve'
 Processed_profiles = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/Outputs'
 
@@ -325,7 +327,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         Ed_physic = pd.read_csv(os.path.join(Processed_profiles, wmo, (wmo + '_Ed.csv')))
         Lu_physic = pd.DataFrame()
     except (FileNotFoundError, pd.errors.EmptyDataError):
-
         print(f'Retrieval failed for float {wmo} Ed. Creating new dataframe...')
         Ed_physic = pd.DataFrame()
     try:
@@ -369,6 +370,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         print(f"No calibration file found for rad='Ed' and wmo={wmo}")
         continue
 
+
     comments = ['These data were collected and made freely available by the International Argo Program and the national programs',
         'that contribute to it (https://argo.ucsd.edu, https://www.ocean-ops.org). The Argo Program is part of the',
         'Global Ocean Observing System https://doi.org/10.17882/42182.',
@@ -382,8 +384,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         'Uncertainties (_unc) are computed with a bootstrap technique and encompass uncertainty in fitting Kd to the profile and depth uncertainty. Details available in documentation.']
 
     # Define metadata for the SeaBASS file
-    metadata = {
-        'investigators': 'Nils_Haentjens,Charlotte_Begouen_Demeaux',
+    metadata = {'investigators': 'Nils_Haentjens,Charlotte_Begouen_Demeaux',
         'affiliations': 'University_of_Maine,University_of_Maine',
         'contact': 'nils.haentjens@maine.edu',
         'experiment': 'PVST_VDIUP',
@@ -399,12 +400,18 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         'water_depth': 'NA',
         'measurement_depth': 'NA'}
 
+    # Initialize an empty DataFrame to store the results
+
     for idx, filename in enumerate(sorted(glob.glob(os.path.join(root, wmo, 'profiles', '*_aux.nc')))):
 
         current_cycle = re.search(r"_([0-9]+).*_aux\.nc$", filename).group(1)
-         # if current_cycle in processed_cycles and int(current_cycle) in Kd['profile'].values and int(current_cycle) in Ed_physic['profile']:
-         #     print(f'Profile {current_cycle} already processed for float {wmo}. Skipping...')
-         #     continue
+        if current_cycle in processed_cycles and int(current_cycle) in Kd['profile'].values and int(current_cycle) in Ed_physic['profile']:
+             print(f'Profile {current_cycle} already processed for float {wmo}. Skipping...')
+             continue
+
+        if int(current_cycle) < 13 and wmo == '4903660':
+            print(f'Skipping WMO {wmo} as current_cycle is {current_cycle} or below')
+            continue
 
         if '001D' in filename:
             print('Dark file, skipping') # Skip the file if it is a dark file
@@ -425,8 +432,13 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
         ed_n_prof = np.argwhere(
             data.STATION_PARAMETERS.values == b'RAW_DOWNWELLING_IRRADIANCE                                      ')
+        # Location has changed in the new version of the data
+        if len(ed_n_prof) == 0:
+            ed_n_prof = np.argwhere(
+                data.PARAMETER.values == b'RAW_DOWNWELLING_IRRADIANCE                                      ')
+
         lu_n_prof = np.argwhere(
-            data.STATION_PARAMETERS.values == b'RAW_UPWELLING_RADIANCE                                          ')
+             data.STATION_PARAMETERS.values == b'RAW_UPWELLING_RADIANCE                                          ')
 
         if not len(ed_n_prof) > 0:
             print('skip')
@@ -451,6 +463,12 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
                                                                     cals[(cals['rad'] == 'Ed') & (cals['wmo'] == wmo)][
                                                                         'calibration_file'].iloc[0], Ed_n_prof,
                                                                     PixelStop=144)
+                # else if float is 4903660 , and cycle is 14 or more
+                elif '4903660' in filename and int(current_cycle) >= 13:
+                    Ed_physic_profile = tools.format_ramses_ed_only(filename, meta_filename,
+                                                                    cals[(cals['rad'] == 'Ed') & (cals['wmo'] == wmo)][
+                                                                        'calibration_file'].iloc[0], Ed_n_prof,
+                                                                    PixelBinning = 1)
                 else:
                     Ed_physic_profile = tools.format_ramses_ed_only(filename, meta_filename,
                                                                     cals[(cals['rad'] == 'Ed') & (cals['wmo'] == wmo)][
@@ -545,6 +563,58 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
                                               lon=Ed_profile.lon[0], qc_wls=qc_5wv, step2_r2=0.995, step3_r2=0.997,
                                               step3_r3=0.999, skip_meta_tests=False, skip_dark_test=True)
 
+        # Define the range of associated depths
+        # depth_range = np.linspace(10, 150, 10)
+        # for depth in depth_range:
+        #     # Set the same value for all associated depths
+        #     associated_depths = {w: depth for w in qc_5wv}
+        #
+        #     # Call the organelli16_qc function
+        #     results = QC_Different_Depths.organelli16_qc(
+        #         Ed_profile,
+        #         lat=Ed_profile.lat[0],
+        #         lon=Ed_profile.lon[0],
+        #         qc_wls=qc_5wv,
+        #         step2_r2=0.995,
+        #         step3_r2=0.997,
+        #         step3_r3=0.999,
+        #         skip_meta_tests=False,
+        #         skip_dark_test=True,
+        #         associated_depths=associated_depths)
+        #
+        #     # Extract the global flags for each wavelength
+        #     global_flags = {f'global_flag_{wv}': result[0] for result, wv in zip(results, qc_5wv)}
+        #     global_flags['associated_depth'] = depth
+        #     global_flags['wmo_cycle'] = f"{wmo}_{current_cycle}"
+        #
+        #     # Append the results to the DataFrame
+        #     results_df = pd.concat([results_df, pd.DataFrame([global_flags])], ignore_index=True)
+
+        # associated_depths ={}
+        # Calculate the additional associated depth based on the given criteria
+        # for qc_wl in qc_5wv:
+        #     closest_to_zero = Ed_profile.loc[Ed_profile['depth'].idxmin()]
+        #     threshold_value = 0.01 * closest_to_zero[qc_wl]
+        #     associated_depth = 2 * Ed_profile[Ed_profile[qc_wl] >= threshold_value]['depth'].max()
+        #
+        #     # Set the same value for all associated depths
+        #     associated_depths[qc_wl] = associated_depth
+        #
+        #     results = QC_Different_Depths.organelli16_qc(  Ed_profile,            lat=Ed_profile.lat[0],                lon=Ed_profile.lon[0],               qc_wls=qc_5wv,
+        #         step2_r2=0.995,
+        #         step3_r2=0.997,
+        #         step3_r3=0.999,
+        #         skip_meta_tests=False,
+        #         skip_dark_test=True,
+        #         associated_depths=associated_depths    )
+        #     # Extract the global flags for each wavelength
+        # global_flags = {f'global_flag_{wv}': result[0] for result, wv in zip(results, qc_5wv)}
+        # # Add the associated depth to the global flags
+        # global_flags['associated_depth'] = '2* Zeu'
+        # global_flags['wmo_cycle'] = f"{wmo}_{current_cycle}"
+        #
+        # results_df = pd.concat([results_df, pd.DataFrame([global_flags])], ignore_index=True)
+
         # Plot ed487.0 as a function of depth
         df_flags = pd.DataFrame(columns=wavelengths, index=range(len(Ed_profile)))
         df_results = pd.DataFrame({
@@ -553,6 +623,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             'polynomial_fit': [np.nan],
             'wavelength': [np.nan]
         })
+
         # Iterate over the results
         for result in results:
             # Extract the wavelength and flags
@@ -834,13 +905,13 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             Kd.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Kd.csv'), index=False)
             print(f'Kd file for float {wmo} was created')
                  # Group the Kd DataFrame by month
-            # Kd['year_month'] = pd.to_datetime(Kd['date']).dt.strftime('%Y%m')
-            # # Iterate over each group and create a SeaBASS file
-            # for year_month, group in Kd.groupby('year_month'):
-            #     group = group.drop(columns=['year_month'])
-            #     sb.format_to_seabass(group, metadata, f'PVST_VDIUP-Argo-Kd_{wmo}_{year_month}_R0', path, comments,
-            #                          missing_value_placeholder='-9999', delimiter='comma')
-            # Ed0.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed0.csv'), index=False)
+            Kd['year_month'] = pd.to_datetime(Kd['date']).dt.strftime('%Y%m')
+            # Iterate over each group and create a SeaBASS file
+            for year_month, group in Kd.groupby('year_month'):
+                group = group.drop(columns=['year_month'])
+                sb.format_to_seabass(group, metadata, f'PVST_VDIUP-Argo-Kd_{wmo}_{year_month}_R0', path, comments,
+                                     missing_value_placeholder='-9999', delimiter='comma')
+            Ed0.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed0.csv'), index=False)
             print(f'Ed0 file for float {wmo} was created')
             Ed_physic.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed.csv'), index=False)
             print(f'Ed file for float {wmo} was created')
@@ -848,12 +919,13 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
     # Filter out columns in Kd that contain '_se' or '_bincount'
             plot_ed_profiles(df=Ed_physic, wmo=wmo, kd_df=Kd, wv_target=[490, 555, 660], wv_og=wavelengths, ed0=Ed0,flags_df = flags_df,
                    depth_col='depth')
-
-QC_5wv = pd.DataFrame(Check_5wv)
-
-# SAve to csv
-QC_5wv.to_csv(os.path.join(Processed_profiles, 'QC_5wv.csv'), index=False)
-combined_QC_5wv.to_csv(os.path.join(Processed_profiles, 'combined_QC_5wv.csv'), index=False)
+#
+#
+# QC_5wv = pd.DataFrame(Check_5wv)
+#
+# # SAve to csv
+# QC_5wv.to_csv(os.path.join(Processed_profiles, 'QC_5wv.csv'), index=False)
+# combined_QC_5wv.to_csv(os.path.join(Processed_profiles, 'combined_QC_5wv.csv'), index=False)
 # %% QUALITY CONTROL OF ALL KD PROFILES FROM A SINGLE FLOAT
 
 # Load the Kd profiles
