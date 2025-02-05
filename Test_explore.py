@@ -401,7 +401,12 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
     for idx, filename in enumerate(sorted(glob.glob(os.path.join(root, wmo, 'profiles', '*_aux.nc')))):
 
+
         current_cycle = re.search(r"_([0-9]+).*_aux\.nc$", filename).group(1)
+        if int(current_cycle) > 12 and wmo == '4903660':
+            break
+
+
          # if current_cycle in processed_cycles and int(current_cycle) in Kd['profile'].values and int(current_cycle) in Ed_physic['profile']:
          #     print(f'Profile {current_cycle} already processed for float {wmo}. Skipping...')
          #     continue
