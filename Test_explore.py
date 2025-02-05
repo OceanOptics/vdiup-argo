@@ -11,10 +11,10 @@ import Toolbox_RAMSESv2 as tools
 import matplotlib.pyplot as plt
 import Function_KD
 import gsw
-import Organelli_QC
+import Organelli_QC_Shapiro
 import matplotlib.gridspec as gridspec
 import subprocess
-import QC_Different_Depths
+import time
 root = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve'
 Processed_profiles = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/Outputs_5_QC'
 
@@ -287,7 +287,6 @@ def bootstrap_fit_klu_depth(df, Speed, n_iterations=10, fit_method='iterative'):
         std_luf_kd = bootstrap_results_df.std()
 
     return median_luf_kd, std_luf_kd, median_ed0, std_ed0
-# Function to find the closest wavelength
 
 # Function to find the closest wavelengths
 def find_closest_wavelengths(targets, available_wavelengths):
@@ -532,70 +531,29 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         I = (np.array(wavelengths) >= 350) & (np.array(wavelengths) <= 700)
         Ed_profile['Epar'] = np.trapz((np.array(irr_conv)[:,I] * const[I]) / 6.02214129e23 ) * 1e6 / 1e4 # in umol/cm-2/s-14
 
-        # Organelli QC
-        results = Organelli_QC.organelli16_qc(Ed_profile, lat=Ed_profile.lat[0],
-                                                          lon=Ed_profile.lon[0],qc_wls=wavelengths , step2_r2=0.995, step3_r2=0.997,
-                                                          step3_r3=0.999, skip_meta_tests=False, skip_dark_test=True)
+                # Organelli QC
+        # Measure time for the first function
+        start_time = time.time()
+        results = Organelli_QC_Shapiro.organelli16_qc(Ed_profile, lat=Ed_profile.lat[0],
+                                                      lon=Ed_profile.lon[0], qc_wls=wavelengths, step2_r2=0.995, step3_r2=0.997,
+                                                      step3_r3=0.999, skip_meta_tests=False)
+        end_time = time.time()
+        time_full_wavelengths = end_time - start_time
+
+        # Measure time for the second function
 
         qc_5wv = find_closest_wavelengths(target_qc_wavelengths, wavelengths)
-        results_5wv = Organelli_QC.organelli16_qc(Ed_profile, lat=Ed_profile.lat[0],
-                                              lon=Ed_profile.lon[0], qc_wls=qc_5wv, step2_r2=0.995, step3_r2=0.997,
-                                              step3_r3=0.999, skip_meta_tests=False, skip_dark_test=True)
+        start_time = time.time()
+        results_5wv = Organelli_QC_Shapiro.organelli16_qc(Ed_profile, lat=Ed_profile.lat[0],
+                                                          lon=Ed_profile.lon[0], qc_wls=qc_5wv, step2_r2=0.995, step3_r2=0.997,
+                                                          step3_r3=0.999, skip_meta_tests=False)
+        end_time = time.time()
+        time_5_wavelengths = end_time - start_time
 
-        # Define the range of associated depths
-        # depth_range = np.linspace(10, 150, 10)
-        # for depth in depth_range:
-        #     # Set the same value for all associated depths
-        #     associated_depths = {w: depth for w in qc_5wv}
-        #
-        #     # Call the organelli16_qc function
-        #     results = QC_Different_Depths.organelli16_qc(
-        #         Ed_profile,
-        #         lat=Ed_profile.lat[0],
-        #         lon=Ed_profile.lon[0],
-        #         qc_wls=qc_5wv,
-        #         step2_r2=0.995,
-        #         step3_r2=0.997,
-        #         step3_r3=0.999,
-        #         skip_meta_tests=False,
-        #         skip_dark_test=True,
-        #         associated_depths=associated_depths)
-        #
-        #     # Extract the global flags for each wavelength
-        #     global_flags = {f'global_flag_{wv}': result[0] for result, wv in zip(results, qc_5wv)}
-        #     global_flags['associated_depth'] = depth
-        #     global_flags['wmo_cycle'] = f"{wmo}_{current_cycle}"
-        #
-        #     # Append the results to the DataFrame
-        #     results_df = pd.concat([results_df, pd.DataFrame([global_flags])], ignore_index=True)
+        print(f"Time for full wavelengths: {time_full_wavelengths:.2f} seconds")
+        print(f"Time for 5 wavelengths: {time_5_wavelengths:.2f} seconds")
 
-        # associated_depths ={}
-        # Calculate the additional associated depth based on the given criteria
-        # for qc_wl in qc_5wv:
-        #     closest_to_zero = Ed_profile.loc[Ed_profile['depth'].idxmin()]
-        #     threshold_value = 0.01 * closest_to_zero[qc_wl]
-        #     associated_depth = 2 * Ed_profile[Ed_profile[qc_wl] >= threshold_value]['depth'].max()
-        #
-        #     # Set the same value for all associated depths
-        #     associated_depths[qc_wl] = associated_depth
-        #
-        #     results = QC_Different_Depths.organelli16_qc(  Ed_profile,            lat=Ed_profile.lat[0],                lon=Ed_profile.lon[0],               qc_wls=qc_5wv,
-        #         step2_r2=0.995,
-        #         step3_r2=0.997,
-        #         step3_r3=0.999,
-        #         skip_meta_tests=False,
-        #         skip_dark_test=True,
-        #         associated_depths=associated_depths    )
-        #     # Extract the global flags for each wavelength
-        # global_flags = {f'global_flag_{wv}': result[0] for result, wv in zip(results, qc_5wv)}
-        # # Add the associated depth to the global flags
-        # global_flags['associated_depth'] = '2* Zeu'
-        # global_flags['wmo_cycle'] = f"{wmo}_{current_cycle}"
-        #
-        # results_df = pd.concat([results_df, pd.DataFrame([global_flags])], ignore_index=True)
-
-
-        # Plot ed487.0 as a function of depth
+# Process hyperspectral results first
         df_flags = pd.DataFrame(columns=wavelengths, index=range(len(Ed_profile)))
         df_results = pd.DataFrame({
             'global_flag': [np.nan],
@@ -604,7 +562,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             'wavelength': [np.nan]
         })
 
-        # Iterate over the results
         for result in results:
             # Extract the wavelength and flags
             global_flag, flags, status, polynomial_fit, wv = result
@@ -627,6 +584,29 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             df_results = pd.concat([df_results, new_row], ignore_index=True)
             df_results = df_results.dropna(how='all').reset_index(drop=True)
 
+        data_dict_flags = {
+            'depth': Ed_profile['depth'].values,
+            'profile': [current_cycle] * len(Ed_profile)}
+
+        for wavelength in wavelengths:
+            data_dict_flags[f'flag_{wavelength}'] = df_flags[wavelength].values
+
+        data_flags = pd.concat([data_flags, pd.DataFrame(data_dict_flags)], ignore_index=True)
+
+        df_results_filtered = df_results[df_results['wavelength'] < 660]
+        if ((df_results_filtered['global_flag'] == 2).sum() / len(df_results_filtered) >= 0.8 or
+                (df_results_filtered['global_flag'] == 1).sum() / len(df_results_filtered) == 1):
+            Ed_profile['quality'] = 2  #
+            print(
+                f"Cycle {current_cycle} fails QC for more than 80% of wavelength or all are questionnable: Careful proceeding : BAD")
+        elif ((df_results_filtered['global_flag'] == 0).sum() / len(df_results_filtered) >= 0.8):
+            Ed_profile['quality'] = 0  # GOOD
+            print(f"Cycle {current_cycle} passes QC for more than 80% of wavelength: GOOD")
+        else:
+            Ed_profile['quality'] = 1
+            print(f"Cycle {current_cycle} : Questionnable QC results")
+
+        # Same for 5 wv_QC
         df_flags_5wv = pd.DataFrame(columns=qc_5wv, index=range(len(Ed_profile)))
         df_results_5wv = pd.DataFrame({
             'global_flag': [np.nan],
@@ -671,31 +651,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             'wv_5': global_flags_5[4]
         })
         combined_QC_5wv = pd.concat([combined_QC_5wv, temp_df], ignore_index=True)
-
-        data_dict_flags = {
-            'depth': Ed_profile['depth'].values,
-            'profile': [current_cycle]* len(Ed_profile)}
-
-        for wavelength in wavelengths:
-            data_dict_flags[f'flag_{wavelength}'] = df_flags[wavelength].values
-
-        data_flags = pd.concat([data_flags, pd.DataFrame(data_dict_flags)], ignore_index=True)
-
-        df_results_filtered = df_results[df_results['wavelength'] < 600]
-        if ((df_results_filtered['global_flag'] == 2).sum() / len(df_results_filtered) >= 0.8  or
-            (df_results_filtered['global_flag'] == 1).sum() / len(df_results_filtered) == 1) :
-            Ed_profile['quality'] = 2 #
-            print(f"Cycle {current_cycle} fails QC for more than 80% of wavelength or all are questionnable: Careful proceeding : BAD")
-
-        elif ((df_results_filtered['global_flag'] == 0).sum() / len(df_results_filtered) >= 0.8):
-            Ed_profile['quality'] =0 # GOOD
-            print(f"Cycle {current_cycle} passes QC for more than 80% of wavelength: GOOD")
-
-        else:
-            Ed_profile['quality'] = 1
-            print(f"Cycle {current_cycle} : Questionnable QC results")
-
-##### Redo quality control for the 5 wavelengths
 
         # Count the occurrences of each global_flag
         flag_counts = df_results_5wv['global_flag'].value_counts()
@@ -895,12 +850,11 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             plot_ed_profiles(df=Ed_physic, wmo=wmo, kd_df=Kd, wv_target=[490, 555, 660], wv_og=wavelengths, ed0=Ed0,flags_df = flags_df,
                    depth_col='depth')
 #
-#
-# QC_5wv = pd.DataFrame(Check_5wv)
+QC_5wv = pd.DataFrame(Check_5wv)
 #
 # # SAve to csv
-# QC_5wv.to_csv(os.path.join(Processed_profiles, 'QC_5wv.csv'), index=False)
-# combined_QC_5wv.to_csv(os.path.join(Processed_profiles, 'combined_QC_5wv.csv'), index=False)
+QC_5wv.to_csv(os.path.join(Processed_profiles, 'QC_5wv.csv'), index=False)
+combined_QC_5wv.to_csv(os.path.join(Processed_profiles, 'combined_QC_5wv.csv'), index=False)
 # %% QUALITY CONTROL OF ALL KD PROFILES FROM A SINGLE FLOAT
 
 # Load the Kd profiles
@@ -922,7 +876,7 @@ def extracted_wavelengths(Ed, pattern='ed'):
     wavelengths = np.array(wavelengths)
     return wavelengths
 
-wavelengths = extracted_wavelengths(Ed0, pattern='ed')
+wavelengths = extracted_wavelengths(Ed_all, pattern='ed')
 
 plot_ed_profiles(df = Ed_all,wmo =  wmo, kd_df =Kd, wv_target = [490, 550, 660], wv_og=wavelengths, ed0= Ed0, depth_col='depth')
 
@@ -964,43 +918,65 @@ fig.suptitle('BAD Kd profiles for float ' + wmo)
 plt.show()
 fig.savefig(os.path.join(Processed_profiles, wmo,wmo + '_Kd_bad.png'))
 
-# %%
-from setuptools import setup, Extension
-import pybind11
 
-ext_modules = [
-    Extension(
-        'your_module_name',
-        ['your_module_source.cpp'],
-        include_dirs=[pybind11.get_include()],
-    ),
-]
+# %% Try and do figure for paper
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
 
-setup(
-    name='your_module_name',
-    ext_modules=ext_modules,
-)
 
-# %%
-ed650 = Ed_profile['ed701.0']
-depth = Ed_profile['depth']
+# Filter the DataFrame to get rows where profile == 8 and depth is <= 100 meters
+filtered_df = Ed_all[(Ed_all['profile'] == 13) & (Ed_all['depth'] <= 100)]
 
-mask = depth <= 100
-ed650[ed650 <= 0] = 1e-6
+# Extract the columns that start with 'ed'
+ed_columns = [col for col in filtered_df.columns if col.startswith('ed')]
 
-ln_ed650 = np.log(ed650[mask])
-depth = depth[mask]
+# Plot the ed values as a function of wavelength for each row
+fig = plt.figure(figsize=(12, 10))
+gs = gridspec.GridSpec(2, 1, height_ratios=[2, 1])
 
-coefficients = np.polyfit(depth, ln_ed650, 4)
-# Compute the natural logarithm of ed650.0 values
-poly_fit = np.polyval(coefficients, depth)
+# Top plot: Ed values as a function of wavelength
+ax1 = fig.add_subplot(gs[0])
+colors = cm.viridis(np.linspace(0, 1, len(filtered_df)))
+for idx, (row, color) in enumerate(zip(filtered_df.iterrows(), colors)):
+    ax1.plot(wavelengths, row[1][ed_columns], color=color, alpha=0.7)
 
-# Plot ln(ed650.0) on the y-axis and depth on the x-axis
-plt.figure(figsize=(10, 6))
-plt.plot(depth, ln_ed650, marker='o', linestyle='-')
-plt.plot(depth, poly_fit, linestyle='--', color='red', label='4th Degree Polynomial Fit')
-plt.xlabel('Depth')
-plt.ylabel('ln(ed650.0)')
-plt.title('ln(ed650.0) vs Depth')
-plt.grid(True)
+# Add labels and title
+ax1.set_xlabel('Wavelength (nm)',fontsize=16)
+ax1.set_ylabel('Ed values',fontsize=16)
+ax1.set_title('Float ' + wmo+ ' Ed Spectra for profile 10',fontsize=16)
+ax1.tick_params(axis='both', which='major', labelsize=16)
+
+
+# Create a color bar
+norm = mcolors.Normalize(vmin=0, vmax=100)
+sm = plt.cm.ScalarMappable(cmap='viridis', norm=norm)
+sm.set_array([])
+cbar = plt.colorbar(sm, ax=ax1, orientation='vertical', fraction=0.02, pad=0.04)
+cbar.set_label('Depth (m)',fontsize = 16)
+cbar.ax.tick_params(labelsize=12)
+
+# Bottom plots: Depth as a function of Ed for specific wavelengths
+gs_bottom = gridspec.GridSpecFromSubplotSpec(1, 5, subplot_spec=gs[1])
+
+# Define the specific wavelengths and colors
+specific_wavelengths = [381.0, 441.0, 487.0, 554.0, 621.0]
+plot_colors = ['purple','indigo', 'lightblue', 'green', 'red']
+
+for i, (wavelength, plot_color) in enumerate(zip(specific_wavelengths, plot_colors)):
+    ax = fig.add_subplot(gs_bottom[i])
+    ed_column = f'ed{wavelength}'
+    for idx, row in filtered_df.iterrows():
+        ax.scatter(row[ed_column], row['depth'], color=plot_color, alpha=0.7, marker='o')
+    if i == 0:
+        ax.set_ylabel('Depth (m)', fontsize=16)
+    else:
+        ax.tick_params(axis='y', labelleft=False)  # Disable y-axis labels but keep tick marks
+    ax.set_xlabel(f'Ed {wavelength} (nm)', fontsize=14)
+    ax.tick_params(axis='both', which='major', labelsize=14)
+    ax.invert_yaxis()  # Reverse the depth axis
+
+
+
+plt.tight_layout()
 plt.show()
