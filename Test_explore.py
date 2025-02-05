@@ -446,23 +446,35 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         if len(lu_n_prof) == 0 or skip_lu == True:
             Ed_n_prof = ed_n_prof[0][0]
             try:
-                if '1903578' in filename:
-                    Ed_physic_profile = tools.format_ramses_ed_only(filename, meta_filename,
-                                                                    cals[(cals['rad'] == 'Ed') & (cals['wmo'] == wmo)][
-                                                                        'calibration_file'].iloc[0], Ed_n_prof,
-                                                                    PixelStop=144)
-                else:
-                    Ed_physic_profile = tools.format_ramses_ed_only(filename, meta_filename,
-                                                                    cals[(cals['rad'] == 'Ed') & (cals['wmo'] == wmo)][
-                                                                        'calibration_file'].iloc[0], Ed_n_prof)
+                if skip_lu :
+                    Ed_n_prof = ed_n_prof[0][0]
+                    try:
+                        if '1903578' in filename:
+                            Ed_physic_profile = tools.format_ramses_ed_only(filename, meta_filename,
+                                                                            cals[(cals['rad'] == 'Ed') & (
+                                                                                        cals['wmo'] == wmo)][
+                                                                                'calibration_file'].iloc[0], Ed_n_prof,
+                                                                            PixelStop=144)
+                        # else if float is 4903660 , and cycle is 14 or more
+                        elif '4903660' in filename and int(current_cycle) >= 13:
+                            Ed_physic_profile = tools.format_ramses_ed_only(filename, meta_filename,
+                                                                            cals[(cals['rad'] == 'Ed') & (
+                                                                                        cals['wmo'] == wmo)][
+                                                                                'calibration_file'].iloc[0], Ed_n_prof,
+                                                                            PixelBinning=1)
+                        else:
+                            Ed_physic_profile = tools.format_ramses_ed_only(filename, meta_filename,
+                                                                            cals[(cals['rad'] == 'Ed') & (
+                                                                                        cals['wmo'] == wmo)][
+                                                                                'calibration_file'].iloc[0], Ed_n_prof)
+                    except ValueError:
+                        print('Could not format Ed profile from counts, skipping')
+                        continue
+
             except ValueError:
                 print('Could not format Ed profile from counts, skipping')
                 continue
-        else:
-            Ed_n_prof, Lu_n_prof = ed_n_prof[0][0], lu_n_prof[0][0]
-            Ed_physic_profile, Lu_physic_profile = tools.format_ramses(
-                filename, meta_filename, cals[(cals['rad'] == 'Ed') & (cals['wmo'] == wmo)]['calibration_file'].iloc[0],
-                cals[(cals['rad'] == 'Lu') & (cals['wmo'] == wmo)]['calibration_file'].iloc[0], Ed_n_prof, Lu_n_prof)
+
 
         columns_to_check = [col for col in Ed_physic_profile.columns if col not in ['tilt', 'tilt_1id']]
         if Ed_physic_profile[columns_to_check].map(lambda x: pd.isna(x) or np.isinf(x)).all().all():
@@ -517,11 +529,8 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         metadata_ed['wt'] = interp_temp
         metadata_ed['sal'] = interp_psal
 
-       # metadata_ed['MLD'] = zmld_boyer(metadata_ed.sal, metadata_ed.wt, metadata_ed.depth)[1]
-
         # Concatenate
         Ed_profile = pd.concat([metadata_ed, Ed_physic_profile], axis=1)
-
 
         # Extract wavelength to format for Kd function and rename columns
         wavelengths = [col for col in Ed_profile.columns if isinstance(col, (int, float))]
@@ -539,11 +548,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         results = Organelli_QC.organelli16_qc(Ed_profile, lat=Ed_profile.lat[0],
                                                           lon=Ed_profile.lon[0],qc_wls=wavelengths , step2_r2=0.995, step3_r2=0.997,
                                                           step3_r3=0.999, skip_meta_tests=False, skip_dark_test=True)
-
-        qc_5wv = find_closest_wavelengths(target_qc_wavelengths, wavelengths)
-        results_5wv = Organelli_QC.organelli16_qc(Ed_profile, lat=Ed_profile.lat[0],
-                                              lon=Ed_profile.lon[0], qc_wls=qc_5wv, step2_r2=0.995, step3_r2=0.997,
-                                              step3_r3=0.999, skip_meta_tests=False, skip_dark_test=True)
 
         # Plot ed487.0 as a function of depth
         df_flags = pd.DataFrame(columns=wavelengths, index=range(len(Ed_profile)))
@@ -576,50 +580,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             df_results = pd.concat([df_results, new_row], ignore_index=True)
             df_results = df_results.dropna(how='all').reset_index(drop=True)
 
-        df_flags_5wv = pd.DataFrame(columns=qc_5wv, index=range(len(Ed_profile)))
-        df_results_5wv = pd.DataFrame({
-            'global_flag': [np.nan],
-            'status': [np.nan],
-            'polynomial_fit': [np.nan],
-            'wavelength': [np.nan]
-        })
-
-        # Process results_5wv
-        for result in results_5wv:
-            # Extract the wavelength and flags
-            global_flag, flags, status, polynomial_fit, wv = result
-            if len(flags) < len(df_flags_5wv):
-                # Create a new array filled with NaN of the same length as df_flags
-                new_flags = np.full(len(df_flags_5wv), 2)
-                # Fill the top of this array with the flags data
-                new_flags[:len(flags)] = flags
-            else:
-                new_flags = flags
-            # Assign the new_flags array to the appropriate column in df_flags
-            df_flags_5wv[wv] = new_flags
-            # Add these values as a new row to the DataFrame
-            new_row = pd.DataFrame({
-                'global_flag': [global_flag],
-                'status': [status],
-                'polynomial_fit': [polynomial_fit],
-                'wavelength': [wv]
-            })
-            df_results_5wv = pd.concat([df_results_5wv, new_row], ignore_index=True)
-            df_results_5wv = df_results_5wv.dropna(how='all').reset_index(drop=True)
-
-        # Ensure all target wavelengths are present in df_results_5wv
-        global_flags_5 = df_results_5wv.set_index('wavelength')['global_flag'].reindex(qc_5wv, fill_value=2).values
-        # Create a DataFrame with the required columns
-        temp_df = pd.DataFrame({
-            'wmo': [wmo] ,
-            'current_cycle': current_cycle,
-            'wv_1': global_flags_5[0],
-            'wv_2': global_flags_5[1],
-            'wv_3': global_flags_5[2],
-            'wv_4': global_flags_5[3],
-            'wv_5': global_flags_5[4]
-        })
-        combined_QC_5wv = pd.concat([combined_QC_5wv, temp_df], ignore_index=True)
 
         data_dict_flags = {
             'depth': Ed_profile['depth'].values,
@@ -644,44 +604,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             Ed_profile['quality'] = 0
             print(f"Cycle {current_cycle} passes QC for more than 50% of wavelength: PASSED")
 
-##### Redo quality control for the 5 wavelengths
-
-        # Count the occurrences of each global_flag
-        flag_counts = df_results_5wv['global_flag'].value_counts()
-
-        # Initialize the counts for each flag
-        count_0 = flag_counts.get(0, 0)
-        count_1 = flag_counts.get(1, 0)
-        count_2 = flag_counts.get(2, 0)
-
-        conditions = {
-            (5, 0, 0): (0, "PASSED"),
-            (4, 1, 0): (0, "PASSED"),
-            (4, 0, 1): (1, "PASSED"),
-            (3, 1, 1): (1, "QUESTIONABLE"),
-            (3, 2, 0): (1, "QUESTIONABLE"),
-            (3, 0, 2): (2, "BAD"),
-            (2, 3, 0): (1, "QUESTIONABLE"),
-            (2, 2, 1): (2, "QUESTIONABLE"),
-            (2, 1, 2): (2, "BAD"),
-            (2, 0, 3): (2, "BAD"),
-            (1, 4, 0): (1, "QUESTIONABLE"),
-            (1, 3, 1): (1, "QUESTIONABLE"),
-            (1, 2, 2): (2, "BAD"),
-            (1, 1, 3): (2, "BAD"),
-            (1, 0, 4): (2, "BAD"),
-            (0, 5, 0): (2, "BAD"),
-            (0, 4, 1): (2, "BAD"),
-            (0, 3, 2): (2, "BAD"),
-            (0, 2, 3): (2, "BAD"),
-            (0, 1, 4): (2, "BAD"),
-            (0, 0, 5): (2, "BAD")
-        }
-
-        # Determine the quality based on the specified conditions
-        quality_5wv, message = conditions.get((count_0, count_1, count_2), (1, "QUESTIONABLE"))
-        Check_5wv.append({'wmo': wmo, 'cycle_number': current_cycle, 'quality_5wv': quality_5wv})
-
         for col in wavelengths:
             Ed_profile.rename(columns={col: 'ed' + str(col)}, inplace=True)
 
@@ -690,10 +612,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         lu_columns = [col for col in Ed_profile.columns if col.startswith(('ed', 'lu'))]
 
         ###### Create Kd document ######
-       # flag_idx = df_flags.isin([2])  # Omit rows with flags 2 (BAD)
-
         new_Ed = Ed_profile.loc[:,['date','time', 'depth'] + lu_columns].copy()
-     #   Ed_robert = Ed_profile.loc[:, ['date', 'time', 'depth', 'lat', 'lon'] + lu_columns].copy()
 
         # Iterate over each wavelength column in new_Ed
         for wavelength, column in zip(wavelengths, lu_columns):
@@ -701,12 +620,9 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             flags = df_flags[wavelength]
             # Replace the values in new_Ed where the flag is 2 with np.nan
             new_Ed.loc[flags[flags == 2].index, column] = np.nan
-            # Ed_robert.loc[flags[flags == 2].index, column] = np.nan
-        # Addition for Robert
 
         fileN = 'Ed_Argo_Hyperspectral_' + wmo + '_' + current_cycle
         path = os.path.join(Processed_profiles, wmo)
-    #    Ed_robert.to_csv(os.path.join(path, fileN + '.csv'), index=False, na_rep='NaN')
 
         # Add to global table of the float
         new_column_names = ["kd" + str(wavelength) for wavelength in wavelengths]
@@ -782,11 +698,8 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         Ed_profile = Ed_profile[columns]
 
         #Create the .csv file
-        # fileN ='PVST_VDIUP-Argo-Kd_'+ wmo + '_' + current_cycle + '_Ed' +'_raw'
         path = os.path.join(Processed_profiles, wmo )
         # Ed_profile.to_csv(os.path.join(path, fileN +'_raw.csv'), index=False)
-        # #Create the .sb file
-        # sb.format_to_seabass(Ed_profile, metadata, fileN, path, comments, missing_value_placeholder= '-9999', delimiter= 'comma')
 
         Ed_with_station = Ed_profile.copy()
         Ed_with_station['profile'] = current_cycle
@@ -834,13 +747,13 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             Kd.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Kd.csv'), index=False)
             print(f'Kd file for float {wmo} was created')
                  # Group the Kd DataFrame by month
-            # Kd['year_month'] = pd.to_datetime(Kd['date']).dt.strftime('%Y%m')
-            # # Iterate over each group and create a SeaBASS file
-            # for year_month, group in Kd.groupby('year_month'):
-            #     group = group.drop(columns=['year_month'])
-            #     sb.format_to_seabass(group, metadata, f'PVST_VDIUP-Argo-Kd_{wmo}_{year_month}_R0', path, comments,
-            #                          missing_value_placeholder='-9999', delimiter='comma')
-            # Ed0.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed0.csv'), index=False)
+            Kd['year_month'] = pd.to_datetime(Kd['date']).dt.strftime('%Y%m')
+            # Iterate over each group and create a SeaBASS file
+            for year_month, group in Kd.groupby('year_month'):
+                group = group.drop(columns=['year_month'])
+                sb.format_to_seabass(group, metadata, f'PVST_VDIUP-Argo-Kd_{wmo}_{year_month}_R0', path, comments,
+                                     missing_value_placeholder='-9999', delimiter='comma')
+            Ed0.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed0.csv'), index=False)
             print(f'Ed0 file for float {wmo} was created')
             Ed_physic.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed.csv'), index=False)
             print(f'Ed file for float {wmo} was created')
@@ -849,11 +762,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             plot_ed_profiles(df=Ed_physic, wmo=wmo, kd_df=Kd, wv_target=[490, 555, 660], wv_og=wavelengths, ed0=Ed0,flags_df = flags_df,
                    depth_col='depth')
 
-QC_5wv = pd.DataFrame(Check_5wv)
-
-# SAve to csv
-QC_5wv.to_csv(os.path.join(Processed_profiles, 'QC_5wv.csv'), index=False)
-combined_QC_5wv.to_csv(os.path.join(Processed_profiles, 'combined_QC_5wv.csv'), index=False)
 # %% QUALITY CONTROL OF ALL KD PROFILES FROM A SINGLE FLOAT
 
 # Load the Kd profiles
