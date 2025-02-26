@@ -287,6 +287,7 @@ def bootstrap_fit_klu_depth(df, Speed, n_iterations=10, fit_method='iterative'):
         std_luf_kd = bootstrap_results_df.std()
 
     return median_luf_kd, std_luf_kd, median_ed0, std_ed0
+# Function to find the closest wavelength
 
 # Function to find the closest wavelengths
 def find_closest_wavelengths(targets, available_wavelengths):
@@ -357,11 +358,15 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
     meta_filename = os.path.join(root, wmo, f'{wmo}_meta_aux.nc')
 
+    # Set the maximum number of iterations
+    # max_iterations = 15
+    # # Loop counter
+    # iteration_count = 0
+
     # Check if the calibration file exists for the given wmo and Ed
     if  cals[(cals['rad'] == 'Ed') & (cals['wmo'] == wmo)].empty:
         print(f"No calibration file found for rad='Ed' and wmo={wmo}")
         continue
-
 
     comments = ['These data were collected and made freely available by the International Argo Program and the national programs',
         'that contribute to it (https://argo.ucsd.edu, https://www.ocean-ops.org). The Argo Program is part of the',
@@ -376,7 +381,8 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         'Uncertainties (_unc) are computed with a bootstrap technique and encompass uncertainty in fitting Kd to the profile and depth uncertainty. Details available in documentation.']
 
     # Define metadata for the SeaBASS file
-    metadata = {'investigators': 'Nils_Haentjens,Charlotte_Begouen_Demeaux',
+    metadata = {
+        'investigators': 'Nils_Haentjens,Charlotte_Begouen_Demeaux',
         'affiliations': 'University_of_Maine,University_of_Maine',
         'contact': 'nils.haentjens@maine.edu',
         'experiment': 'PVST_VDIUP',
@@ -392,14 +398,16 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         'water_depth': 'NA',
         'measurement_depth': 'NA'}
 
-    # Initialize an empty DataFrame to store the results
-
     for idx, filename in enumerate(sorted(glob.glob(os.path.join(root, wmo, 'profiles', '*_aux.nc')))):
 
+
         current_cycle = re.search(r"_([0-9]+).*_aux\.nc$", filename).group(1)
-        # if current_cycle in processed_cycles and int(current_cycle) in Kd['profile'].values and int(current_cycle) in Ed_physic['profile']:
-        #      print(f'Profile {current_cycle} already processed for float {wmo}. Skipping...')
-        #      continue
+        if int(current_cycle) > 12 and wmo == '4903660':
+            break
+
+         # if current_cycle in processed_cycles and int(current_cycle) in Kd['profile'].values and int(current_cycle) in Ed_physic['profile']:
+         #     print(f'Profile {current_cycle} already processed for float {wmo}. Skipping...')
+         #     continue
 
         if '001D' in filename:
             print('Dark file, skipping') # Skip the file if it is a dark file
@@ -420,11 +428,8 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
         ed_n_prof = np.argwhere(
             data.STATION_PARAMETERS.values == b'RAW_DOWNWELLING_IRRADIANCE                                      ')
-        # Location has changed in the new version of the data
-        if len(ed_n_prof) == 0:
-            ed_n_prof = np.argwhere(
-                data.PARAMETER.values == b'RAW_DOWNWELLING_IRRADIANCE                                      ')
-
+        lu_n_prof = np.argwhere(
+            data.STATION_PARAMETERS.values == b'RAW_UPWELLING_RADIANCE                                          ')
 
         if not len(ed_n_prof) > 0:
             print('skip')
@@ -441,27 +446,38 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
         skip_lu = True
 
-        if  skip_lu == True:
+        if len(lu_n_prof) == 0 or skip_lu == True:
             Ed_n_prof = ed_n_prof[0][0]
             try:
-                if '1903578' in filename:
-                    Ed_physic_profile = tools.format_ramses_ed_only(filename, meta_filename,
-                                                                    cals[(cals['rad'] == 'Ed') & (cals['wmo'] == wmo)][
-                                                                        'calibration_file'].iloc[0], Ed_n_prof,
-                                                                    PixelStop=144)
-                # else if float is 4903660 , and cycle is 14 or more
-                elif '4903660' in filename and int(current_cycle) >= 13:
-                    Ed_physic_profile = tools.format_ramses_ed_only(filename, meta_filename,
-                                                                    cals[(cals['rad'] == 'Ed') & (cals['wmo'] == wmo)][
-                                                                        'calibration_file'].iloc[0], Ed_n_prof,
-                                                                    PixelBinning = 1)
-                else:
-                    Ed_physic_profile = tools.format_ramses_ed_only(filename, meta_filename,
-                                                                    cals[(cals['rad'] == 'Ed') & (cals['wmo'] == wmo)][
-                                                                        'calibration_file'].iloc[0], Ed_n_prof)
+                if skip_lu :
+                    Ed_n_prof = ed_n_prof[0][0]
+                    try:
+                        if '1903578' in filename:
+                            Ed_physic_profile = tools.format_ramses_ed_only(filename, meta_filename,
+                                                                            cals[(cals['rad'] == 'Ed') & (
+                                                                                        cals['wmo'] == wmo)][
+                                                                                'calibration_file'].iloc[0], Ed_n_prof,
+                                                                            PixelStop=144)
+                        # else if float is 4903660 , and cycle is 14 or more
+                        elif '4903660' in filename and int(current_cycle) >= 13:
+                            Ed_physic_profile = tools.format_ramses_ed_only(filename, meta_filename,
+                                                                            cals[(cals['rad'] == 'Ed') & (
+                                                                                        cals['wmo'] == wmo)][
+                                                                                'calibration_file'].iloc[0], Ed_n_prof,
+                                                                            PixelBinning=1)
+                        else:
+                            Ed_physic_profile = tools.format_ramses_ed_only(filename, meta_filename,
+                                                                            cals[(cals['rad'] == 'Ed') & (
+                                                                                        cals['wmo'] == wmo)][
+                                                                                'calibration_file'].iloc[0], Ed_n_prof)
+                    except ValueError:
+                        print('Could not format Ed profile from counts, skipping')
+                        continue
+
             except ValueError:
                 print('Could not format Ed profile from counts, skipping')
                 continue
+
 
         columns_to_check = [col for col in Ed_physic_profile.columns if col not in ['tilt', 'tilt_1id']]
         if Ed_physic_profile[columns_to_check].map(lambda x: pd.isna(x) or np.isinf(x)).all().all():
@@ -471,6 +487,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         #Correct tilt from 10th of degree to 1 degree
         Ed_physic_profile['tilt'] = Ed_physic_profile['tilt'] / 10
         Ed_physic_profile['tilt_1id'] = Ed_physic_profile['tilt_1id'] / 10
+
         # Read Meta Data
         basename = os.path.basename(filename)
         metadata_ed = pd.DataFrame(  {'wt': [np.nan] * Ed_physic_profile.shape[0],
@@ -560,7 +577,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             'polynomial_fit': [np.nan],
             'wavelength': [np.nan]
         })
-
+        # Iterate over the results
         for result in results:
             # Extract the wavelength and flags
             global_flag, flags, status, polynomial_fit, wv = result
@@ -583,9 +600,10 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             df_results = pd.concat([df_results, new_row], ignore_index=True)
             df_results = df_results.dropna(how='all').reset_index(drop=True)
 
+
         data_dict_flags = {
             'depth': Ed_profile['depth'].values,
-            'profile': [current_cycle] * len(Ed_profile)}
+            'profile': [current_cycle]* len(Ed_profile)}
 
         for wavelength in wavelengths:
             data_dict_flags[f'flag_{wavelength}'] = df_flags[wavelength].values
@@ -603,7 +621,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             print(f"Cycle {current_cycle} passes QC for more than 80% of wavelength: GOOD")
         else:
             Ed_profile['quality'] = 1
-            print(f"Cycle {current_cycle} : Questionnable QC results")
 
         # Same for 5 wv_QC
         df_flags_5wv = pd.DataFrame(columns=qc_5wv, index=range(len(Ed_profile)))
@@ -695,7 +712,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         lu_columns = [col for col in Ed_profile.columns if col.startswith(('ed', 'lu'))]
 
         ###### Create Kd document ######
-
         new_Ed = Ed_profile.loc[:,['date','time', 'depth'] + lu_columns].copy()
 
         # Iterate over each wavelength column in new_Ed
@@ -733,7 +749,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
 
      # Calculate the median and standard deviation across the bootstrap samples
-        median_luf_kd, std_luf_kd, median_Ed0, std_Ed0 = bootstrap_fit_klu_depth(new_Ed, Speed, n_iterations=100, fit_method='iterative')
+        median_luf_kd, std_luf_kd, median_Ed0, std_Ed0 = bootstrap_fit_klu_depth(new_Ed, Speed, n_iterations=10, fit_method='iterative')
         result = Function_KD.fit_klu(new_Ed,  fit_method='iterative', wl_interp_method='None', smooth_method='None',  only_continuous_obs=False)
         result_Kd = result['Kl']
         SE_Kd = result['Luf_sd']/np.sqrt(result['data_count'])
@@ -782,11 +798,8 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         Ed_profile = Ed_profile[columns]
 
         #Create the .csv file
-        # fileN ='PVST_VDIUP-Argo-Kd_'+ wmo + '_' + current_cycle + '_Ed' +'_raw'
         path = os.path.join(Processed_profiles, wmo )
         # Ed_profile.to_csv(os.path.join(path, fileN +'_raw.csv'), index=False)
-        # #Create the .sb file
-        # sb.format_to_seabass(Ed_profile, metadata, fileN, path, comments, missing_value_placeholder= '-9999', delimiter= 'comma')
 
         Ed_with_station = Ed_profile.copy()
         Ed_with_station['profile'] = current_cycle
