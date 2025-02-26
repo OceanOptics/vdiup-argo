@@ -923,9 +923,8 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 
-
 # Filter the DataFrame to get rows where profile == 8 and depth is <= 100 meters
-filtered_df = Ed_all[(Ed_all['profile'] == 13) & (Ed_all['depth'] <= 100)]
+filtered_df = Ed_all[(Ed_all['profile'] == 2) & (Ed_all['depth'] <= 100)]
 
 # Extract the columns that start with 'ed'
 ed_columns = [col for col in filtered_df.columns if col.startswith('ed')]
@@ -941,10 +940,10 @@ for idx, (row, color) in enumerate(zip(filtered_df.iterrows(), colors)):
     ax1.plot(wavelengths, row[1][ed_columns], color=color, alpha=0.7)
 
 # Add labels and title
-ax1.set_xlabel('Wavelength (nm)',fontsize=16)
-ax1.set_ylabel('Ed values',fontsize=16)
-ax1.set_title('Float ' + wmo+ ' Ed Spectra for profile 10',fontsize=16)
-ax1.tick_params(axis='both', which='major', labelsize=16)
+ax1.set_xlabel('Wavelength (nm)',fontsize=20)
+ax1.set_ylabel(r'$E_d$ (W m$^{-2}$ nm$^{-1}$)', fontsize=27)
+ax1.set_title('Float ' + wmo+ ' $E_d$ Spectra for profile #2',fontsize=26)
+ax1.tick_params(axis='both', which='major', labelsize=18)
 
 
 # Create a color bar
@@ -952,8 +951,8 @@ norm = mcolors.Normalize(vmin=0, vmax=100)
 sm = plt.cm.ScalarMappable(cmap='viridis', norm=norm)
 sm.set_array([])
 cbar = plt.colorbar(sm, ax=ax1, orientation='vertical', fraction=0.02, pad=0.04)
-cbar.set_label('Depth (m)',fontsize = 16)
-cbar.ax.tick_params(labelsize=12)
+cbar.set_label('Depth (m)',fontsize = 20)
+cbar.ax.tick_params(labelsize=18)
 
 # Bottom plots: Depth as a function of Ed for specific wavelengths
 gs_bottom = gridspec.GridSpecFromSubplotSpec(1, 5, subplot_spec=gs[1])
@@ -968,14 +967,12 @@ for i, (wavelength, plot_color) in enumerate(zip(specific_wavelengths, plot_colo
     for idx, row in filtered_df.iterrows():
         ax.scatter(row[ed_column], row['depth'], color=plot_color, alpha=0.7, marker='o')
     if i == 0:
-        ax.set_ylabel('Depth (m)', fontsize=16)
+        ax.set_ylabel('Depth (m)', fontsize=24)
     else:
         ax.tick_params(axis='y', labelleft=False)  # Disable y-axis labels but keep tick marks
-    ax.set_xlabel(f'Ed {wavelength} (nm)', fontsize=14)
-    ax.tick_params(axis='both', which='major', labelsize=14)
+    ax.set_xlabel(f'$E_d$({wavelength})', fontsize=18)
+    ax.tick_params(axis='both', which='major', labelsize=16)
     ax.invert_yaxis()  # Reverse the depth axis
-
-
 
 plt.tight_layout()
 plt.show()
