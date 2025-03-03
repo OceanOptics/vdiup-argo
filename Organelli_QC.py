@@ -84,25 +84,6 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
                 # if not 2 <= sun_elevation:
                 #     return False, flags, 'NIGHTTIME'
 
-            # # -- Step 1: Dark test --
-            if not skip_dark_test:
-                # Find dark section of profile
-                i, converged = 0, True
-                while lilliefors(pd.DataFrame(rad, dtype=float).iloc[i:])[1] < 0.01:
-                    if len(df_filtered) - i < 10:
-                        converged = False
-                        break
-                    i += 1  # Start deeper
-                # Compute dark (not needed for HyperNav as integrated dark shutter is included)
-                dark_wl = np.mean(rad.iloc[i:]) if converged else np.nan
-                rad = rad - dark_wl
-
-                # Check valid number of observations
-                if i < 5:
-                    flags[:] = bad
-                    results.append( (2, flags, 'TOO_FEW_OBS_DARK', False,qc_wl))
-                    continue
-
             # -- Step 2: Cloud signal --
             # Check fit quality
             pd.options.mode.chained_assignment = None

@@ -42,7 +42,7 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
     if np.isnan(wavelengths).any():
         raise ValueError("wavelengths array contains NaN values")
     # Initialize output
-    result = pd.DataFrame(np.full((len(wavelengths), 4), np.nan), columns=['Luf', 'Luf_sd', 'Kl', 'data_count'])
+    result = pd.DataFrame(np.full((len(wavelengths), 5), np.nan), columns=['Luf', 'Luf_sd', 'Kl', 'data_count','Kd_sd'],)
 
     # Remove values where z is above water
     mask = df['depth'] >= 0 | np.isnan(df['depth'])
@@ -63,7 +63,6 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
 
     if only_continuous_obs:  # Only high frequency sampling
         idx_end = (df['datetime'].diff(-1).abs() > pd.Timedelta(seconds=20)).idxmax()
-
 
     # Select rows based on the condition that none of the values in the selected "LU" columns are NaN
     lu_columns = [col for col in df.columns if col.startswith(('LU', 'ed'))]
@@ -120,6 +119,7 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
         lu = lu.apply(pd.to_numeric, errors='coerce')
         lu_log = lu.apply(np.log)
         # Compute a first penetration depth using 2nd order polynomial as in Zing et al. 2020
+
         def guess_zpd(z, lu_log):
             # Filter out NaN values for the current column
             valid_mask = ~np.isnan(lu_log)
@@ -157,9 +157,17 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
                     zpd0 = np.nan
             return zpd0
 
+        # Initialize an array to store zpd values for each wavelength
+        zpd = np.full(lu_log.shape[1], np.nan)
+
+        # Iterate over each column (wavelength) in lu_log
+        for i, col in enumerate(lu_log.columns):
+            zpd[i] = guess_zpd(z, lu_log[col])
+
         zpd = lu_log.apply(lambda y: guess_zpd(z, y), axis='index').to_numpy()
         # Iterate to find static zpd
         c = np.full((2, len(lu.columns)), np.nan)
+        c_sd = np.empty_like(c)
         zpd_history = np.empty(10)
         for wli in range(c.shape[1]):
             valid_mask = ~np.isnan(lu_log.iloc[:, wli])
@@ -172,14 +180,20 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
 
             if len(z_valid) < 10 or len(lu_log_valid) < 10 :
                 continue
+
             zpd_history[1:] = float('nan')
             zpd_history[0] = zpd[wli]
             sel = z_valid < zpd[wli]
+            if np.sum(sel) ==0:
+                print('No data above zpd')
+                zpd[wli] = np.nan
+                continue
+
             if np.sum(sel) < MIN_N_TO_ITER_FIT:
                 # Start with at least 5 points (even if deeper than zpd)
                 sel.iloc[:MIN_N_TO_ITER_FIT] = True
             for i in range(10):
-                c[:, wli] = np.polyfit(z_valid[sel], lu_log_valid[sel], 1)
+                c[:, wli],cov = np.polyfit(z_valid[sel], lu_log_valid[sel], 1,cov=True)
                 if c[0, wli] == 0:
                     zpd[wli] = np.nan  # Zpd cannot be computed.
                 else:
@@ -199,9 +213,13 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
                 zpd_history[i] = zpd[wli]
             else:
                 logger.debug(f'Fit max iteration reached (zpd={float(zpd[wli]):.1f}).')
-
+            # Compute standard deviation
+            c_sd[:,wli] = np.sqrt(np.diag(cov))
         result.loc[wk_sel, 'Luf'] = np.exp(c[1, :])
         result.loc[wk_sel, 'Kl'] = -c[0, :]
+
+        result.loc[wk_sel, 'Luf_sd'] = c_sd[1, :] * result.loc[wk_sel, 'Luf']
+        result.loc[wk_sel, 'Kd_sd'] = c_sd[0, :]
     else:
         raise ValueError(f'fit method: {fit_method} not supported.')
     # Interpolate missing wavelength
@@ -238,12 +256,7 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
         pass
     else:
         raise ValueError(f'smooth_method: {smooth_method} not supported.')
-    # Compute residual standard deviation
-    lu_modeled = result.loc[wk_sel, 'Luf'].to_numpy() * np.exp(
-        -np.outer(z, result.loc[wk_sel, 'Kl'].to_numpy()))
-    t = np.std(lu - lu_modeled, axis=0)
-    # Assign the computed standard deviation to the result DataFrame
-    result.loc[wk_sel,'Luf_sd'] = pd.Series(t)
+
 
     # logger.debug(f"Kl fit in {time() - tic:.3f} seconds")
     return result
