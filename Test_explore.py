@@ -8,14 +8,10 @@ import xarray as xr
 import seabass_maker as sb
 sys.path.append('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve')
 import Toolbox_RAMSESv2 as tools
-import matplotlib.pyplot as plt
 import Function_KD
-import gsw
-import Organelli_QC
 import Organelli_QC_Shapiro
 import matplotlib.gridspec as gridspec
 import subprocess
-import datetime
 root = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve'
 Processed_profiles = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs'
 
@@ -303,7 +299,7 @@ def find_closest_wavelengths(targets, available_wavelengths):
 Check_5wv =[]
 combined_QC_5wv = pd.DataFrame()
 
-# Define the target wavelengths
+# Define the target wavelengths for the 5 wv quality control
 target_qc_wavelengths = [380, 443, 490, 550, 620]
 
 for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
@@ -406,9 +402,9 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
 
         current_cycle = re.search(r"_([0-9]+).*_aux\.nc$", filename).group(1)
-        if int(current_cycle) > 12 and wmo == '4903660':
+        if int(current_cycle)  > 12 and wmo == '4903660':
             break
-         # if current_cycle in processed_cycles and int(current_cycle) in Kd['profile'].values and int(current_cycle) in Ed_physic['profile']:
+        #  # if current_cycle in processed_cycles and int(current_cycle) in Kd['profile'].values and int(current_cycle) in Ed_physic['profile']:
          #     print(f'Profile {current_cycle} already processed for float {wmo}. Skipping...')
          #     continue
 
@@ -486,10 +482,10 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         if Ed_physic_profile[columns_to_check].map(lambda x: pd.isna(x) or np.isinf(x)).all().all():
             print('All values in the relevant columns are NaN or infinite. Skipping...')
             continue
-
-        #Correct tilt from 10th of degree to 1 degree
-        Ed_physic_profile['tilt'] = Ed_physic_profile['tilt'] / 10
-        Ed_physic_profile['tilt_1id'] = Ed_physic_profile['tilt_1id'] / 10
+        #
+        # #Correct tilt from 10th of degree to 1 degree
+        # Ed_physic_profile['tilt'] = Ed_physic_profile['tilt'] / 10
+        # Ed_physic_profile['tilt_1id'] = Ed_physic_profile['tilt_1id'] / 10
 
         # Read Meta Data
         basename = os.path.basename(filename)
@@ -604,12 +600,12 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         data_flags = pd.concat([data_flags, pd.DataFrame(data_dict_flags)], ignore_index=True)
 
         df_results_filtered = df_results[df_results['wavelength'] < 600]
-        if (df_results_filtered['global_flag'] == 2).sum() / len(df_results_filtered) > 0.5 :
+        if (df_results_filtered['global_flag'] == 2).sum() / len(df_results_filtered) > 0.5:
             Ed_profile['quality'] = 2 #
             print(f"Cycle {current_cycle} fails QC for more than 50% of wavelength: Careful proceeding : BAD")
 
-        elif ((df_results_filtered['global_flag'] == 1).sum() / len(df_results_filtered) > 0.5  or
-              (df_results_filtered['global_flag'] == 2).sum() / len(df_results_filtered) > 0.05) :
+        elif ((df_results_filtered['global_flag'] == 1).sum() / len(df_results_filtered) > 0.5 or
+              (df_results_filtered['global_flag'] == 2).sum() / len(df_results_filtered) > 0.05):
             print(f"Cycle {current_cycle} questionable QC for more than 50% of wavelength or 5% bad :QUESTIONABLE")
             Ed_profile['quality'] = 1
 
@@ -758,7 +754,12 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
      # Calculate the median and standard deviation across the bootstrap samples
         median_luf_kd, std_luf_kd, median_Ed0, std_Ed0 = bootstrap_fit_klu_depth(new_Ed, Speed, n_iterations=10, fit_method='iterative')
-        result = Function_KD.fit_klu(new_Ed,  fit_method='iterative', wl_interp_method='None', smooth_method='None',  only_continuous_obs=False)
+        result, no_data_above_zpd = Function_KD.fit_klu(new_Ed,  fit_method='iterative', wl_interp_method='None', smooth_method='None',  only_continuous_obs=False)
+
+        # Add a questionable flag if the zpd is above any data.
+        if no_data_above_zpd:
+            Ed_profile['quality'][0] = 1
+
         result_Kd = result['Kl']
         SE_Kd = result['Kd_sd']/np.sqrt(result['data_count'])
 
@@ -769,6 +770,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         else:
             Kd_uncertainty = pd.Series([np.nan] * len(wavelengths))
             std_Ed0 = pd.Series([np.nan] * len(wavelengths))
+
 
         data_dict_K ={
             'profile': int(current_cycle),
@@ -905,45 +907,6 @@ wavelengths = extracted_wavelengths(Ed0, pattern='ed')
 
 plot_ed_profiles(df = Ed_all,wmo =  wmo, kd_df =Kd, wv_target = [490, 550, 660], wv_og=wavelengths, ed0= Ed0, depth_col='depth')
 
-# %%
-# Interactive figure to see if all Kd are really good and assign them a bad flag if not
-
-kd_columns = [col for col in Kd.columns if col.startswith('kd') and 'unc' not in col]
-# Calculate the mean Kd and the mean Ed0 for each wavelength
-mean_kd = Kd[kd_columns].mean()
-mean_ed0 = Ed0[[col.replace('kd', 'ed0') for col in kd_columns]].mean()
-
-fig, ax = plt.figure(figsize=(12, 10)), plt.gca()
-# Plot each row in the filtered DataFrame
-filtered_data = Kd[Kd['quality'] ==0]
-lines = []
-for idx, row in filtered_data.iterrows():
-    line, = ax.plot(wavelengths, row[kd_columns], label=f'Cycle {row.profile}')
-    lines.append(line)
-# Set number of ticks
-num_ticks = 10
-plt.xticks(np.linspace(min(wavelengths), max(wavelengths), num_ticks))
-plt.ylim([0, 1])
-fig.suptitle('Good Kd profiles for float ' + wmo)
-plt.show()
-fig.savefig(os.path.join(Processed_profiles, wmo,wmo + '_Kd_good.png'))
-
-fig, ax = plt.figure(figsize=(12, 10)), plt.gca()
-# Plot each row in the filtered DataFrame
-filtered_data = Kd[Kd['quality'] ==2]
-lines = []
-for idx, row in filtered_data.iterrows():
-    line, = ax.plot(wavelengths, row[kd_columns], label=f'Cycle {row.profile}')
-    lines.append(line)
-# Set number of ticks
-num_ticks = 10
-plt.xticks(np.linspace(min(wavelengths), max(wavelengths), num_ticks))
-plt.ylim([0, 3])
-fig.suptitle('BAD Kd profiles for float ' + wmo)
-plt.show()
-fig.savefig(os.path.join(Processed_profiles, wmo,wmo + '_Kd_bad.png'))
-
-
 # %% Try and do figure for paper
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
@@ -1006,7 +969,7 @@ for i, (wavelength, plot_color) in enumerate(zip(specific_wavelengths, plot_colo
 plt.tight_layout()
 plt.show()
 
-#%% Just plot kd spectra
+#%% Simple plot of 1 kd spectra
 
 kd_columns = [col for col in Kd.columns if col.startswith('kd') and col.endswith('.0')]
 
