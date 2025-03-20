@@ -31,6 +31,9 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
     :return: DataFrame containing fitted Lu (Luf) and diffuse attenuation coefficient (Kl)
     """
     import logging
+
+    no_data_above_zpd = False  # Initialize the flag
+
     logger = logging.getLogger('fit_klu')
     MIN_N_TO_FIRST_FIT = 10
     MIN_N_TO_ITER_FIT = 5
@@ -184,10 +187,11 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
             zpd_history[1:] = float('nan')
             zpd_history[0] = zpd[wli]
             sel = z_valid < zpd[wli]
-            if np.sum(sel) ==0:
-                print('No data above zpd')
-                zpd[wli] = np.nan
-                continue
+            if np.sum(sel) == 0:
+                print('No data above zpd. Still calculating zpd/Kd')
+                no_data_above_zpd = True  # Set the flag
+                # zpd[wli] = np.nan
+                # continue
 
             if np.sum(sel) < MIN_N_TO_ITER_FIT:
                 # Start with at least 5 points (even if deeper than zpd)
@@ -259,4 +263,4 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
 
 
     # logger.debug(f"Kl fit in {time() - tic:.3f} seconds")
-    return result
+    return result, no_data_above_zpd
