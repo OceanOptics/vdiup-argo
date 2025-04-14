@@ -550,8 +550,7 @@ def format_ramses_ed_only(filename, metaname, calEd_name, Ed_n_prof, PixelBinnin
     meta = xr.open_dataset(metaname)
 
     # Find Config parameters index of RAMSES 1 and 2
-    index_Arc = np.where(
-        meta.LAUNCH_CONFIG_PARAMETER_NAME.values == b'CONFIG_RamsesArcOutputPixelBegin_NUMBER                                                                                         ')[
+    index_Arc = np.where(meta.LAUNCH_CONFIG_PARAMETER_NAME.values == b'CONFIG_RamsesArcOutputPixelBegin_NUMBER                                                                                         ')[
         0][0]
     index_Acc = np.where(
         meta.LAUNCH_CONFIG_PARAMETER_NAME.values == b'CONFIG_RamsesAccOutputPixelBegin_NUMBER                                                                                         ')[

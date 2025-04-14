@@ -9,7 +9,7 @@ from scipy.interpolate import pchip_interpolate, interp1d
 from scipy.optimize import curve_fit
 
 
-def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='triangular', only_continuous_obs=True):
+def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='triangular', only_continuous_obs=True,verbose=False):
     """
     Compute diffuse attenuation coefficient (KL) and extrapolate Lu to surface
     :param df: DataFrame containing datetime, depth, bin_counts, and Lu(lambda)
@@ -187,8 +187,9 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
             zpd_history[1:] = float('nan')
             zpd_history[0] = zpd[wli]
             sel = z_valid < zpd[wli]
-            if np.sum(sel) == 0:
-                print('No data above zpd. Still calculating zpd/Kd')
+            if np.sum(sel) == 0 and wli <50:
+                if verbose:
+                    print('No data above zpd. Still calculating zpd/Kd')
                 no_data_above_zpd = True  # Set the flag
                 # zpd[wli] = np.nan
                 # continue

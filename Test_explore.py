@@ -7,14 +7,14 @@ import pandas as pd
 import xarray as xr
 import seabass_maker as sb
 sys.path.append('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve')
-import Toolbox_RAMSESv2 as tools
+import Toolbox_RAMSES as tools
 import Function_KD
 import Organelli_QC_Shapiro
 import matplotlib.gridspec as gridspec
 import subprocess
 root = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve'
 Processed_profiles = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs'
-
+import matplotlib.pyplot as plt
 
 # %% Download all the profiles from the floats from the GDAC
 
@@ -262,8 +262,8 @@ def bootstrap_fit_klu_depth(df, Speed, n_iterations=10, fit_method='iterative'):
 
         # Run the fit_klu function
         try:
-            result = Function_KD.fit_klu(df_resampled, fit_method='iterative', wl_interp_method='None',
-                                         smooth_method='None', only_continuous_obs=False)
+            result,no_data_above_zpd = Function_KD.fit_klu(df_resampled, fit_method='iterative', wl_interp_method='None',
+                                         smooth_method='None', only_continuous_obs=False, verbose=False)
             bootstrap_results.append(result['Kl'].values)
             bootstrap_Ed0.append(result['Luf'].values)
         except Exception as e:
@@ -327,6 +327,8 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
         print(f'Retrieval failed for float {wmo} Ed. Creating new dataframe...')
         Ed_physic = pd.DataFrame()
+
+
     try:
         Kd = pd.read_csv(os.path.join(Processed_profiles, wmo, (wmo + '_Kd.csv')))
     except (FileNotFoundError, pd.errors.EmptyDataError):
@@ -336,6 +338,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         # Create the DataFrame
         Kd = pd.DataFrame(columns_data)
         print(f"Retrieval failed for float {wmo} Kd. Creating new dataframe...")
+
 
     try:
         Ed0 = pd.read_csv(os.path.join(Processed_profiles, wmo, (wmo + '_Ed0.csv')))
@@ -386,7 +389,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         'affiliations': 'University_of_Maine,University_of_Maine',
         'contact': 'nils.haentjens@maine.edu',
         'experiment': 'PVST_VDIUP',
-        'cruise': 'VDIUP-Argo-Kd',
+        'cruise': f'Argo_{wmo}',
         'platform_id': wmo,
         'instrument_manufacturer': 'TriOS',
         'instrument_model': 'RAMSES',
@@ -399,7 +402,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         'measurement_depth': 'NA'}
 
     for idx, filename in enumerate(sorted(glob.glob(os.path.join(root, wmo, 'profiles', '*_aux.nc')))):
-
 
         current_cycle = re.search(r"_([0-9]+).*_aux\.nc$", filename).group(1)
         if int(current_cycle)  > 12 and wmo == '4903660':
@@ -537,6 +539,29 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         # Extract wavelength to format for Kd function and rename columns
         wavelengths = [col for col in Ed_profile.columns if isinstance(col, (int, float))]
 
+        if len(wavelengths) == 140:
+            # Update columns_data to include an additional 140 columns
+            columns_data.update({str(i): pd.NA for i in range(282, 282 + 280)})
+            # Reindex Kd to include these new columns
+            Kd = Kd.reindex(columns=columns_data.keys())
+
+        # Format Kd
+        new_column_names = ["kd" + str(wavelength) for wavelength in wavelengths]
+        column_mapping = dict(zip(Kd.columns[6:len(wavelengths)+6], new_column_names))
+        Kd = Kd.rename(columns=column_mapping)
+        # Generate new column names with "_unc" for the following 70 columns
+        new_column_names_unc = ["kd" + str(wavelength) + "_unc" for wavelength in wavelengths]
+        # Map these new names with "_unc" to the columns 74 to 143
+        column_mapping_unc = dict(zip(Kd.columns[len(wavelengths)+ 6: len(wavelengths)*2 +6], new_column_names_unc))
+        Kd = Kd.rename(columns=column_mapping_unc)
+        new_column_names_SE = ["kd" + str(wavelength) + "_se" for wavelength in wavelengths]
+        column_mapping_SE = dict(zip(Kd.columns[2*len(wavelengths) + 6: len(wavelengths) * 3 + 6], new_column_names_SE))
+        Kd = Kd.rename(columns=column_mapping_SE)
+        new_column_names_bin = ["kd" + str(wavelength) + "_bincount" for wavelength in wavelengths]
+        column_mapping_bin = dict(zip(Kd.columns[3*len(wavelengths) + 6: len(wavelengths) * 4 + 6], new_column_names_bin))
+        Kd = Kd.rename(columns=column_mapping_bin)
+
+
         # CALCUlATE PAR
         # Convert irradiance to photon flux (micromol photons m⁻² s⁻¹ )
         irr_conv = (Ed_profile[wavelengths] * 10**-2) # Convert uW/cm/s-1 to W/m-2/nm
@@ -550,10 +575,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         results = Organelli_QC_Shapiro.organelli16_qc(Ed_profile, lat=Ed_profile.lat[0],
                                                           lon=Ed_profile.lon[0],qc_wls=wavelengths , step2_r2=0.995, step3_r2=0.997,
                                                           step3_r3=0.999)
-
-        # results_shapipi = Organelli_QC_Shapiro.organelli16_qc(Ed_profile, lat=Ed_profile.lat[0],
-        #                                                   lon=Ed_profile.lon[0],qc_wls=wavelengths , step2_r2=0.995, step3_r2=0.997,
-        #                                                   step3_r3=0.999)
 
         qc_5wv = find_closest_wavelengths(target_qc_wavelengths, wavelengths)
         results_5wv = Organelli_QC_Shapiro.organelli16_qc(Ed_profile, lat=Ed_profile.lat[0],
@@ -614,7 +635,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             print(f"Cycle {current_cycle} passes QC for more than 50% of wavelength: PASSED")
 
         # If BAD quality, skip the rest of the loop and do not compute Kd
-        if Ed_profile['quality'][0] == 2:
+        if Ed_profile.loc[0,'quality'] == 2:
             data_dict_K = {
                 'profile': int(current_cycle),
                 'date': Ed_profile.date[0],
@@ -628,84 +649,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
                 data_dict_K[col] = np.nan
             data_Kd.append(data_dict_K)
             continue
-
-        df_flags_5wv = pd.DataFrame(columns=wavelengths, index=range(len(Ed_profile)))
-        df_results_5wv = pd.DataFrame({
-            'global_flag': [np.nan],
-            'status': [np.nan],
-            'polynomial_fit': [np.nan],
-            'wavelength': [np.nan]
-        })
-        # Process results_5wv
-        for result in results_5wv:
-            # Extract the wavelength and flags
-            global_flag, flags, status, polynomial_fit, wv = result
-            if len(flags) < len(df_flags_5wv):
-                # Create a new array filled with NaN of the same length as df_flags
-                new_flags = np.full(len(df_flags_5wv), 2)
-                # Fill the top of this array with the flags data
-                new_flags[:len(flags)] = flags
-            else:
-                new_flags = flags
-            # Assign the new_flags array to the appropriate column in df_flags
-            df_flags_5wv[wv] = new_flags
-            # Add these values as a new row to the DataFrame
-            new_row = pd.DataFrame({
-                'global_flag': [global_flag],
-                'status': [status],
-                'polynomial_fit': [polynomial_fit],
-                'wavelength': [wv]
-            })
-            df_results_5wv = pd.concat([df_results_5wv, new_row], ignore_index=True)
-            df_results_5wv = df_results_5wv.dropna(how='all').reset_index(drop=True)
-
-        # Ensure all target wavelengths are present in df_results_5wv
-        global_flags_5 = df_results_5wv.set_index('wavelength')['global_flag'].reindex(qc_5wv, fill_value=2).values
-        # Create a DataFrame with the required columns
-        temp_df = pd.DataFrame({
-            'wmo': [wmo],
-            'current_cycle': current_cycle,
-            'wv_1': global_flags_5[0],
-            'wv_2': global_flags_5[1],
-            'wv_3': global_flags_5[2],
-            'wv_4': global_flags_5[3],
-            'wv_5': global_flags_5[4]})
-        combined_QC_5wv = pd.concat([combined_QC_5wv, temp_df], ignore_index=True)
-
-        # Count the occurrences of each global_flag
-        flag_counts = df_results_5wv['global_flag'].value_counts()
-
-        # Initialize the counts for each flag
-        count_0 = flag_counts.get(0, 0)
-        count_1 = flag_counts.get(1, 0)
-        count_2 = flag_counts.get(2, 0)
-
-        conditions = {
-            (5, 0, 0): (0, "PASSED"),
-            (4, 1, 0): (0, "PASSED"),
-            (4, 0, 1): (1, "PASSED"),
-            (3, 1, 1): (1, "QUESTIONABLE"),
-            (3, 2, 0): (1, "QUESTIONABLE"),
-            (3, 0, 2): (2, "BAD"),
-            (2, 3, 0): (1, "QUESTIONABLE"),
-            (2, 2, 1): (2, "QUESTIONABLE"),
-            (2, 1, 2): (2, "BAD"),
-            (2, 0, 3): (2, "BAD"),
-            (1, 4, 0): (1, "QUESTIONABLE"),
-            (1, 3, 1): (1, "QUESTIONABLE"),
-            (1, 2, 2): (2, "BAD"),
-            (1, 1, 3): (2, "BAD"),
-            (1, 0, 4): (2, "BAD"),
-            (0, 5, 0): (2, "BAD"),
-            (0, 4, 1): (2, "BAD"),
-            (0, 3, 2): (2, "BAD"),
-            (0, 2, 3): (2, "BAD"),
-            (0, 1, 4): (2, "BAD"),
-            (0, 0, 5): (2, "BAD")}
-
-        # Determine the quality based on the specified conditions
-        quality_5wv, message = conditions.get((count_0, count_1, count_2), (1, "QUESTIONABLE"))
-        Check_5wv.append({'wmo': wmo, 'cycle_number': current_cycle, 'quality_5wv': quality_5wv})
 
         for col in wavelengths:
             Ed_profile.rename(columns={col: 'ed' + str(col)}, inplace=True)
@@ -729,22 +672,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         fileN = 'Ed_Argo_Hyperspectral_' + wmo + '_' + current_cycle
         path = os.path.join(Processed_profiles, wmo)
 
-        # Add to global table of the float
-        new_column_names = ["kd" + str(wavelength) for wavelength in wavelengths]
-        column_mapping = dict(zip(Kd.columns[6:len(wavelengths)+6], new_column_names))
-        Kd = Kd.rename(columns=column_mapping)
-        # Generate new column names with "_unc" for the following 70 columns
-        new_column_names_unc = ["kd" + str(wavelength) + "_unc" for wavelength in wavelengths]
-        # Map these new names with "_unc" to the columns 74 to 143
-        column_mapping_unc = dict(zip(Kd.columns[len(wavelengths)+ 6: len(wavelengths)*2 +6], new_column_names_unc))
-        Kd = Kd.rename(columns=column_mapping_unc)
-        new_column_names_SE = ["kd" + str(wavelength) + "_se" for wavelength in wavelengths]
-        column_mapping_SE = dict(zip(Kd.columns[2*len(wavelengths) + 6: len(wavelengths) * 3 + 6], new_column_names_SE))
-        Kd = Kd.rename(columns=column_mapping_SE)
-        new_column_names_bin = ["kd" + str(wavelength) + "_bincount" for wavelength in wavelengths]
-        column_mapping_bin = dict(zip(Kd.columns[3*len(wavelengths) + 6: len(wavelengths) * 4 + 6], new_column_names_bin))
-        Kd = Kd.rename(columns=column_mapping_bin)
-
         new_column_names = ["ed0" + str(wavelength) for wavelength in wavelengths]
         column_mapping = dict(zip(Ed0.columns[5:len(wavelengths)+5], new_column_names))
         Ed0 = Ed0.rename(columns=column_mapping)
@@ -752,13 +679,13 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         column_mapping_unc = dict(zip(Ed0.columns[len(wavelengths)+6 :len(wavelengths)*2 +6], new_column_names_unc))
         Ed0 = Ed0.rename(columns=column_mapping_unc)
 
-     # Calculate the median and standard deviation across the bootstrap samples
-        median_luf_kd, std_luf_kd, median_Ed0, std_Ed0 = bootstrap_fit_klu_depth(new_Ed, Speed, n_iterations=10, fit_method='iterative')
+    # Calculate the median and standard deviation across the bootstrap samples
+        median_luf_kd, std_luf_kd, median_Ed0, std_Ed0 = bootstrap_fit_klu_depth(new_Ed, Speed, n_iterations=100, fit_method='iterative')
         result, no_data_above_zpd = Function_KD.fit_klu(new_Ed,  fit_method='iterative', wl_interp_method='None', smooth_method='None',  only_continuous_obs=False)
 
         # Add a questionable flag if the zpd is above any data.
         if no_data_above_zpd:
-            Ed_profile['quality'][0] = 1
+            Ed_profile.loc[0,'quality']= 1
 
         result_Kd = result['Kl']
         SE_Kd = result['Kd_sd']/np.sqrt(result['data_count'])
@@ -770,7 +697,6 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
         else:
             Kd_uncertainty = pd.Series([np.nan] * len(wavelengths))
             std_Ed0 = pd.Series([np.nan] * len(wavelengths))
-
 
         data_dict_K ={
             'profile': int(current_cycle),
@@ -828,13 +754,17 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
     Kd = pd.DataFrame(data_Kd)
     Ed0 = pd.DataFrame(data_Ed0)
 
+    # Check if the last two columns are empty
+    if Kd.iloc[:, -1].isna().all() and Kd.iloc[:, -2].isna().all():
+        # Remove the last two columns
+        Kd = Kd.iloc[:, :-2]
+
     flags_df = data_flags
 
     # Load the watercoeff file
     watercoeff = pd.read_csv('watercoeff.csv')
 
     # Iterate through the Kd DataFrame and update values
-
     for col in Kd.columns:
         # Extract the wavelength from the column name
         match = re.search(r'kd(\d+)', col)
@@ -871,7 +801,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             # Iterate over each group and create a SeaBASS file
             for year_month, group in Kd.groupby('year_month'):
                 group = group.drop(columns=['year_month'])
-                sb.format_to_seabass(group, metadata, f'PVST_VDIUP-Argo-Kd_{wmo}_{year_month}_R0', path, comments,
+                sb.format_to_seabass(group, metadata, f'PVST_VDIUP-Argo-Kd_{wmo}_{year_month}_R1', path, comments,
                                      missing_value_placeholder='-9999', delimiter='comma')
             Ed0.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed0.csv'), index=False)
             print(f'Ed0 file for float {wmo} was created')
@@ -985,4 +915,3 @@ plt.ylabel('Kd', fontsize=14)
 plt.title('Kd as a function of Wavelengths', fontsize=16)
 plt.grid(True)
 plt.show()
-
