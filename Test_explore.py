@@ -485,10 +485,10 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             continue
 
         #Correct tilt from 10th of degree to 1 degree
-        Ed_physic_profile['tilt'] = Ed_physic_profile['tilt'] / 10
-        Ed_physic_profile['tilt_1id'] = Ed_physic_profile['tilt_1id'] / 10
-
-        # Read Meta Data
+        # Ed_physic_profile['tilt'] = Ed_physic_profile['tilt'] / 10
+        # Ed_physic_profile['tilt_1id'] = Ed_physic_profile['tilt_1id'] / 10
+        #
+        # # Read Meta Data
         basename = os.path.basename(filename)
         metadata_ed = pd.DataFrame(  {'wt': [np.nan] * Ed_physic_profile.shape[0],
                                     'sal': [np.nan] * Ed_physic_profile.shape[0],
@@ -989,3 +989,4 @@ for i, (wavelength, plot_color) in enumerate(zip(specific_wavelengths, plot_colo
 
 plt.tight_layout()
 plt.show()
+
