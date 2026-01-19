@@ -936,9 +936,10 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 
+Ed_profile = pd.read_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed.csv'))
 # Filter the DataFrame to get rows where profile == 8 and depth is <= 100 meters
-filtered_df = Ed_all[(Ed_all['profile'] == 2) & (Ed_all['depth'] <= 100)]
-
+cycle = 1
+filtered_df = Ed_profile[(Ed_profile['profile'] == cycle) & (Ed_profile['depth'] <= 100)]
 # Extract the columns that start with 'ed'
 ed_columns = [col for col in filtered_df.columns if col.startswith('ed')]
 
@@ -955,9 +956,9 @@ for idx, (row, color) in enumerate(zip(filtered_df.iterrows(), colors)):
 # Add labels and title
 ax1.set_xlabel('Wavelength (nm)',fontsize=20)
 ax1.set_ylabel(r'$E_d$ (W m$^{-2}$ nm$^{-1}$)', fontsize=27)
-ax1.set_title('Float ' + wmo+ ' $E_d$ Spectra for profile #2',fontsize=26)
+# set title with wmo and cycle in the title
+ax1.set_title('Float ' + wmo+ ' $E_d$ Spectra for profile #' + str(cycle), fontsize=26)
 ax1.tick_params(axis='both', which='major', labelsize=18)
-
 
 # Create a color bar
 norm = mcolors.Normalize(vmin=0, vmax=100)
@@ -971,7 +972,7 @@ cbar.ax.tick_params(labelsize=18)
 gs_bottom = gridspec.GridSpecFromSubplotSpec(1, 5, subplot_spec=gs[1])
 
 # Define the specific wavelengths and colors
-specific_wavelengths = [381.0, 441.0, 487.0, 554.0, 621.0]
+specific_wavelengths = find_closest_wavelengths([381.0, 441.0, 487.0, 554.0, 621.0], wavelengths)
 plot_colors = ['purple','indigo', 'lightblue', 'green', 'red']
 
 for i, (wavelength, plot_color) in enumerate(zip(specific_wavelengths, plot_colors)):
@@ -988,5 +989,6 @@ for i, (wavelength, plot_color) in enumerate(zip(specific_wavelengths, plot_colo
     ax.invert_yaxis()  # Reverse the depth axis
 
 plt.tight_layout()
+plt.savefig(os.path.join(Processed_profiles, wmo, wmo + f'_Ed_profile_{cycle}.png'))
 plt.show()
 
