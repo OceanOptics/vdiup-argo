@@ -13,6 +13,8 @@ import xarray as xr
 import glob
 import os
 import concurrent.futures
+from collections import defaultdict
+
 
 
 # Following is taken from PACE hackweek
@@ -244,94 +246,287 @@ def process_satellite_rrs(kd_loc, variable_wanted, sat="PACE"):
         print("Processing interrupted by user.")
     finally:
         return pd.DataFrame(all_rows)
-
-# def process_satellite_rrs(kd_loc, variable_wanted, sat="PACE"):
-#     if sat not in SAT_LOOKUP.keys():
-#         raise ValueError(f"{sat} is not in the lookup dictionary. Available sats are: {', '.join(SAT_LOOKUP)}")
-#     short_name = SAT_LOOKUP[sat]
-#
-#     all_rows = []
-#     rrs_wavelengths = None
-#
-#     try:
-#         with concurrent.futures.ThreadPoolExecutor() as executor:
-#             future_to_row = {}
-#             for idx, row in kd_loc.iterrows():
-#                 date = pd.to_datetime(row['date'], format='%Y%m%d').strftime("%Y-%m-%d")
-#                 latitude = row['lat']
-#                 longitude = row['lon']
-#                 time_bounds = (f"{date}T00:00:00Z", f"{date}T23:59:59Z")
-#
-#                 try:
-#                     results = earthaccess.search_data(temporal=time_bounds, point=(longitude, latitude), short_name=short_name)
-#                 except IndexError:
-#                     print(f"No data found for {date}, {latitude}, {longitude}")
-#                     continue
-#
-#                 files = earthaccess.open(results)
-#
-#                 if rrs_wavelengths is None:
-#                     rrs_wavelengths = extract_rrs_wavelengths(files[0])
-#
-#                 for file in files:
-#                     future = executor.submit(process_granule, file, latitude, longitude, rrs_wavelengths, variable_wanted)
-#                     future_to_row[future] = (date, latitude, longitude)
-#
-#             for future in concurrent.futures.as_completed(future_to_row):
-#                 try:
-#                     row_data = future.result()
-#                     all_rows.append(row_data)
-#                 except Exception as e:
-#                     date, latitude, longitude = future_to_row[future]
-#                     print(f"Error processing {date}, {latitude}, {longitude}: {e}")
-#     except KeyboardInterrupt:
-#         print("Processing interrupted by user.")
-#     finally:
-#         executor.shutdown(wait=True)
-#         return pd.DataFrame(all_rows)
 def extract_rrs_wavelengths(file):
     with xr.open_dataset(file, group="sensor_band_parameters") as ds_bands:
         return ds_bands["wavelength_3d"].values
-# def process_satellite_rrs(kd_loc, variable_wanted,sat="PACE",selected_dates=None):
-#     if sat not in SAT_LOOKUP.keys():
-#         raise ValueError(f"{sat} is not in the lookup dictionary. Available sats are: {', '.join(SAT_LOOKUP)}")
-#     short_name = SAT_LOOKUP[sat]
-#
-#     all_rows = []
-#     rrs_wavelengths = None  # Initialize rrs_wavelengths as None
-#
-#     try:
-#         for idx, row in kd_loc.iterrows():
-#             try:
-#                 date = pd.to_datetime(row['date'], format='%Y%m%d').strftime("%Y-%m-%d")
-#                 latitude = row['lat']
-#                 longitude = row['lon']
-#                 time_bounds = (f"{date}T00:00:00Z", f"{date}T23:59:59Z")
-#
-#                 try:
-#                     results = earthaccess.search_data(temporal=time_bounds, point=(longitude, latitude), short_name=short_name)
-#                 except IndexError:
-#                     print(f"No data found for {date}, {latitude}, {longitude}")
-#                     continue
-#
-#                 files = earthaccess.open(results)
-#
-#                 if rrs_wavelengths is None:
-#                     rrs_wavelengths = extract_rrs_wavelengths(files[0])
-#
-#                 for file in files:
-#                     granule_date = pd.to_datetime(
-#                         file.granule["umm"]["TemporalExtent"]["RangeDateTime"]["BeginningDateTime"])
-#                     print(f"Running Granule: {granule_date}")
-#                     row_data = get_fivebyfive(file, latitude, longitude, rrs_wavelengths, variable_wanted)
-#                     all_rows.append(row_data)
-#
-#             except Exception as e:
-#                 print(f"Error processing {date}, {latitude}, {longitude}: {e}")
-#                 continue
-#     finally:
-#         return pd.DataFrame(all_rows)
+def gather_search_results(kd_loc, sat):
+    """Search once per unique (date, rough lat/lon). Returns [(profile_idx, granule), ...]."""
+    short_name = SAT_LOOKUP[sat]
+    kd_loc = kd_loc.copy()
+    kd_loc['_date_str'] = pd.to_datetime(kd_loc['date']).dt.strftime('%Y-%m-%d')
+    kd_loc['_lat_r'] = kd_loc['lat'].round(1)   # ~10 km grouping; granules are much bigger
+    kd_loc['_lon_r'] = kd_loc['lon'].round(1)
 
+    cache = {}
+    pairs = []
+    for idx, row in kd_loc.iterrows():
+        key = (row['_date_str'], row['_lat_r'], row['_lon_r'])
+        if key not in cache:
+            try:
+                cache[key] = earthaccess.search_data(
+                    temporal=(f"{row['_date_str']}T00:00:00Z",
+                              f"{row['_date_str']}T23:59:59Z"),
+                    point=(row['lon'], row['lat']),
+                    short_name=short_name)
+            except Exception as e:
+                print(f"  search failed for {key}: {e}")
+                cache[key] = []
+        for granule in cache[key]:
+            pairs.append((idx, granule))
+    return pairs
+def point_in_granule_bbox(granule, lat, lon):
+    """Quick spatial check using CMR bounding rectangle/polygon metadata."""
+    try:
+        spatial = granule["umm"]["SpatialExtent"]["HorizontalSpatialDomain"]["Geometry"]
+        if "BoundingRectangles" in spatial:
+            for box in spatial["BoundingRectangles"]:
+                if (box["SouthBoundingCoordinate"] <= lat <= box["NorthBoundingCoordinate"]
+                    and box["WestBoundingCoordinate"] <= lon <= box["EastBoundingCoordinate"]):
+                    return True
+            return False
+    except (KeyError, TypeError):
+        pass
+    return True
+def process_granule_multi(granule, profile_specs, rrs_wavelengths, variable_wanted):
+    """Process one granule for all profiles that need it.
+    profile_specs = [(idx, lat, lon), ...]
+    Uses lazy reads: coarse subsample to find the rough pixel, then a small
+    full-resolution window around it, instead of pulling the whole lat/lon/data arrays.
+    """
+    try:
+        file = earthaccess.open([granule])[0]
+        ds_nav = xr.open_dataset(file, group="navigation_data")
+        ds_geo = xr.open_dataset(file, group="geophysical_data")
+    except Exception as e:
+        print(f"  open failed: {e}")
+        return []
+
+    granule_time = pd.to_datetime(
+        granule["umm"]["TemporalExtent"]["RangeDateTime"]["BeginningDateTime"])
+    exclude_mask = sum(L2_FLAGS[f] for f in EXCLUSION_FLAGS)
+    prefix = 'oci_kd' if variable_wanted == 'Kd' else 'oci_rrs'
+
+    try:
+        # Step 1: coarse subsample for cheap nearest-pixel search (one-time per granule)
+        sat_lat_coarse = ds_nav['latitude'][::8, ::8].values
+        sat_lon_coarse = ds_nav['longitude'][::8, ::8].values
+        nl_full, np_full = ds_nav['latitude'].shape
+
+        out = []
+        for prof_idx, lat, lon in profile_specs:
+            # Step 2: rough nearest on the coarse grid
+            d = (sat_lat_coarse - lat) ** 2 + (sat_lon_coarse - lon) ** 2
+            ci, cj = np.unravel_index(np.argmin(d), d.shape)
+
+            # Step 3: full-resolution window around the coarse hit
+            cl_lo = max(ci * 8 - 8, 0); cl_hi = min(ci * 8 + 8, nl_full)
+            cp_lo = max(cj * 8 - 8, 0); cp_hi = min(cj * 8 + 8, np_full)
+            lat_win = ds_nav['latitude'].isel(
+                number_of_lines=slice(cl_lo, cl_hi),
+                pixels_per_line=slice(cp_lo, cp_hi)).values
+            lon_win = ds_nav['longitude'].isel(
+                number_of_lines=slice(cl_lo, cl_hi),
+                pixels_per_line=slice(cp_lo, cp_hi)).values
+            d2 = (lat_win - lat) ** 2 + (lon_win - lon) ** 2
+            wi, wj = np.unravel_index(np.argmin(d2), d2.shape)
+            cl, cp = cl_lo + wi, cp_lo + wj
+
+            # Step 4: 5x5 box around the true nearest pixel
+            ls = max(cl - 2, 0); le = min(cl + 3, nl_full)
+            ps = max(cp - 2, 0); pe = min(cp + 3, np_full)
+            v = ds_geo[variable_wanted].isel(
+                number_of_lines=slice(ls, le),
+                pixels_per_line=slice(ps, pe)).values
+            f = ds_geo['l2_flags'].isel(
+                number_of_lines=slice(ls, le),
+                pixels_per_line=slice(ps, pe)).values
+
+            valid = np.bitwise_and(f, exclude_mask) == 0
+
+            if valid.any():
+                v_valid = v[valid]
+                mean0 = np.nanmean(v_valid, axis=0)
+                std0 = np.nanstd(v_valid, axis=0)
+                sel = np.all(np.abs(v_valid - mean0) <= 1.5 * std0, axis=1)
+                mean = np.nanmean(v_valid[sel], axis=0).flatten()
+                cv = np.nanstd(v_valid[sel], axis=0) / mean
+                cv_med = np.nanmedian(
+                    cv[(rrs_wavelengths >= 405) & (rrs_wavelengths <= 570)])
+            else:
+                cv_med = np.nan
+                mean = np.full_like(rrs_wavelengths, np.nan, dtype=float)
+
+            # Get the exact pixel coordinates (cheap — single value from the window)
+            row = {
+                'oci_datetime': granule_time,
+                'oci_cv': cv_med,
+                'oci_latitude': float(lat_win[wi, wj]),
+                'oci_longitude': float(lon_win[wi, wj]),
+                'oci_pixel_valid': int(valid.sum()),
+            }
+            for wv, mv in zip(rrs_wavelengths, mean):
+                row[f'{prefix}{int(wv)}'] = mv
+            out.append(row)
+    except Exception as e:
+        print(f"  read failed: {e}")
+        out = []
+    finally:
+        ds_nav.close()
+        ds_geo.close()
+
+    return out
+
+def process_granule_multi_local(local_path, granule, profile_specs,
+                                 rrs_wavelengths, variable_wanted):
+    """Same as process_granule_multi but operates on a local .nc path."""
+    try:
+        ds_nav = xr.open_dataset(local_path, group="navigation_data")
+        ds_geo = xr.open_dataset(local_path, group="geophysical_data")
+    except Exception as e:
+        print(f"  open failed: {e}")
+        return []
+
+    granule_time = pd.to_datetime(
+        granule["umm"]["TemporalExtent"]["RangeDateTime"]["BeginningDateTime"])
+    exclude_mask = sum(L2_FLAGS[f] for f in EXCLUSION_FLAGS)
+    prefix = 'oci_kd' if variable_wanted == 'Kd' else 'oci_rrs'
+
+    try:
+        # Now that the file is local, just read full arrays — it's all memory.
+        sat_lat = ds_nav['latitude'].values
+        sat_lon = ds_nav['longitude'].values
+        var_data = ds_geo[variable_wanted].values
+        flags_data = ds_geo['l2_flags'].values
+
+        out = []
+        for prof_idx, lat, lon in profile_specs:
+            distances = (sat_lat - lat) ** 2 + (sat_lon - lon) ** 2
+            cl, cp = np.unravel_index(np.argmin(distances), distances.shape)
+            ls = max(cl - 2, 0); le = min(cl + 3, sat_lat.shape[0])
+            ps = max(cp - 2, 0); pe = min(cp + 3, sat_lat.shape[1])
+            v = var_data[ls:le, ps:pe]
+            f = flags_data[ls:le, ps:pe]
+            valid = np.bitwise_and(f, exclude_mask) == 0
+
+            if valid.any():
+                v_valid = v[valid]
+                mean0 = np.nanmean(v_valid, axis=0)
+                std0 = np.nanstd(v_valid, axis=0)
+                sel = np.all(np.abs(v_valid - mean0) <= 1.5 * std0, axis=1)
+                mean = np.nanmean(v_valid[sel], axis=0).flatten()
+                cv = np.nanstd(v_valid[sel], axis=0) / mean
+                cv_med = np.nanmedian(
+                    cv[(rrs_wavelengths >= 405) & (rrs_wavelengths <= 570)])
+            else:
+                cv_med = np.nan
+                mean = np.full_like(rrs_wavelengths, np.nan, dtype=float)
+
+            row = {
+                'oci_datetime': granule_time,
+                'oci_cv': cv_med,
+                'oci_latitude': sat_lat[cl, cp],
+                'oci_longitude': sat_lon[cl, cp],
+                'oci_pixel_valid': int(valid.sum()),
+            }
+            for wv, mv in zip(rrs_wavelengths, mean):
+                row[f'{prefix}{int(wv)}'] = mv
+            out.append(row)
+    except Exception as e:
+        print(f"  read failed: {e}")
+        out = []
+    finally:
+        ds_nav.close()
+        ds_geo.close()
+
+    return out
+
+def process_satellite_rrs_fast(kd_loc, variable_wanted, sat="PACE IOP",
+                               max_workers=4, download_dir=None,
+                               checkpoint_path=None, checkpoint_every=50):
+    """Two-phase: download all granules to disk in parallel, then process locally.
+
+    download_dir: directory to cache .nc files (created if missing).
+    checkpoint_path: CSV path to save partial results; enables resume.
+    """
+    import os, time
+    if download_dir is None:
+        download_dir = os.path.expanduser("~/pace_granule_cache")
+    os.makedirs(download_dir, exist_ok=True)
+
+    # ---- Phase 1: search + dedup ----
+    print(f"  searching granules for {len(kd_loc)} profiles...")
+    pairs = gather_search_results(kd_loc, sat)
+    by_granule = defaultdict(list)
+    granule_objs = {}
+    for prof_idx, granule in pairs:
+        gid = granule["meta"]["concept-id"]
+        by_granule[gid].append(prof_idx)
+        granule_objs[gid] = granule
+    print(f"  {len(pairs)} profile-granule pairs → {len(by_granule)} unique granules")
+
+    # ---- Resume: load checkpoint ----
+    done_gids = set()
+    existing_rows = []
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        ckpt = pd.read_csv(checkpoint_path)
+        if '_gid' in ckpt.columns:
+            done_gids = set(ckpt['_gid'].unique())
+            existing_rows = ckpt.to_dict('records')
+            print(f"  resuming: {len(done_gids)} granules already in checkpoint")
+    todo_gids = [g for g in by_granule if g not in done_gids]
+    print(f"  {len(todo_gids)} granules to process")
+    if not todo_gids:
+        return pd.DataFrame(existing_rows).drop(columns=['_gid'], errors='ignore')
+
+    # ---- Phase 2: bulk download with earthaccess ----
+    print(f"  downloading granules to {download_dir}...")
+    t0 = time.time()
+    granules_to_download = [granule_objs[g] for g in todo_gids]
+    # earthaccess.download handles parallelism, retries, resumption internally
+    local_paths = earthaccess.download(granules_to_download, download_dir, threads=8)
+    # Map back: gid -> local path
+    gid_to_path = dict(zip(todo_gids, local_paths))
+    print(f"  download done in {(time.time() - t0) / 60:.1f} min "
+          f"({len(local_paths)} files, {(time.time() - t0) / len(local_paths):.1f} s/file)")
+
+    # ---- Phase 3: process local files (fast, parallel, no network) ----
+    rrs_wavelengths = extract_rrs_wavelengths(local_paths[0])
+
+    def _job(gid):
+        path = gid_to_path[gid]
+        granule = granule_objs[gid]
+        specs = [(idx, kd_loc.loc[idx, 'lat'], kd_loc.loc[idx, 'lon'])
+                 for idx in by_granule[gid]]
+        rows = process_granule_multi_local(path, granule, specs,
+                                           rrs_wavelengths, variable_wanted)
+        for r in rows:
+            r['_gid'] = gid
+        return rows
+
+    all_rows = list(existing_rows)
+    n_done = n_error = 0
+    t0 = time.time()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futures = [ex.submit(_job, g) for g in todo_gids]
+        for fut in concurrent.futures.as_completed(futures):
+            try:
+                all_rows.extend(fut.result(timeout=30))
+            except Exception as e:
+                n_error += 1
+                if n_error <= 5:
+                    print(f"  process failed: {e}")
+            n_done += 1
+            if checkpoint_path and n_done % checkpoint_every == 0:
+                pd.DataFrame(all_rows).to_csv(checkpoint_path, index=False)
+                rate = n_done / (time.time() - t0)
+                eta = (len(todo_gids) - n_done) / rate / 60 if rate > 0 else 0
+                print(f"  {n_done}/{len(todo_gids)} processed  "
+                      f"({rate:.1f}/s, ETA {eta:.1f} min, errors: {n_error})")
+
+    if checkpoint_path:
+        pd.DataFrame(all_rows).to_csv(checkpoint_path, index=False)
+    print(f"  done: {len(all_rows)} rows, {n_error} errors")
+    return pd.DataFrame(all_rows).drop(columns=['_gid'], errors='ignore')
 def process_satellite_kd(kd_loc, sat="PACE"):
     """
     Download and process satellite data for matchups.
@@ -461,7 +656,6 @@ def match_data(df_sat, df_aoc, cv_max=0.15, senz_max=60.0,
     df_match = pd.DataFrame(df_match_list)
     return df_match
 
-
 def match_data_kd(df_sat, df_aoc):
     """Create matchup dataframe based on selection criteria.
 
@@ -513,7 +707,7 @@ keyword = 'AOP')
 set((i.summary()["short-name"] for i in results))
 
 # First load our complete list of Kd files.
-directory = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs'
+directory = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw'
 # Find all CSV files matching the pattern "*_Kd.csv"
 csv_files = glob.glob(os.path.join(directory, '**', '*_Kd.csv'), recursive=True)
 
@@ -556,24 +750,27 @@ kd_loc['date'] = pd.to_datetime(kd_loc['date'], format='%Y%m%d')
 
 kd_loc = kd_loc[kd_loc['date'] >= '2024-04-01']
 
+# Only keep profiles with QC of 2
+kd_loc = kd_loc[kd_loc['quality'] != 2]
+
+
 # REtrieve the Satellite data
 #sat_cb = process_satellite_kd(kd_loc, sat="PACE KD")
 
-sat_rrs = process_satellite_rrs(kd_loc, sat="PACE IOP",variable_wanted= 'Kd')
-sat_rrs.to_csv('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs/sat_kd_final.csv')
+sat_rrs = process_satellite_rrs_fast(kd_loc, sat="PACE IOP", variable_wanted='Kd',
+    max_workers=4, download_dir='/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/pace_cache',
+    checkpoint_path='/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw/sat_kd_checkpoint.csv')
 
-# merge sat_rrs and sat_rrs2
-# Save the dataset
-#sat_cb.to_csv('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/Outputs/sat_cb.csv')
+sat_rrs.to_csv('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw/sat_kd_final.csv')
 
-# compute matchups
+# Compute matchups
 #matchups = match_data_kd(sat_cb, kd_loc)
 matchups = match_data(sat_rrs, kd_loc,cv_max=0.8, senz_max=70.0,
                min_percent_valid=1.0, max_time_diff=380, std_max=6)
 # Remove columns filled with NaN
 matchups = matchups.dropna(axis=1, how='all')
 #save to csv
-matchups.to_csv('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs/matchups_PACE_Kd_L2.csv')
+matchups.to_csv('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw/matchups_PACE_Kd_L2.csv')
 
 #Drop the rows where quality is 2
 matchups_clean = matchups[matchups.quality != 2]
@@ -615,6 +812,9 @@ colors = plt.cm.viridis(np.linspace(0, 1, len(matchups_clean)))
 
 # Disable interactive mode
 plt.ion()
+all_kd_values = []
+all_oci_kd_values = []
+all_wavelengths = []
 
 # Plot each row
 for idx, row in matchups_clean.iterrows():
@@ -634,6 +834,11 @@ for idx, row in matchups_clean.iterrows():
     relative_difference = np.abs(oci_kd_values - interpolated_kd_values) / (
                 (oci_kd_values + interpolated_kd_values) / 2) * 100
 
+    # Collect data for the scatter plot
+    all_kd_values.extend(interpolated_kd_values)
+    all_oci_kd_values.extend(oci_kd_values)
+    all_wavelengths.extend(oci_kd_wavelengths)
+
     plt.plot(oci_kd_wavelengths, relative_difference, color=colors[idx])
 
 # Add labels and title
@@ -643,7 +848,24 @@ plt.title('Relative Difference between OCI Kd and Kd')
 plt.grid(True)
 plt.show()
 
+
+# Create the scatter plot
+plt.figure(figsize=(10, 8))
+scatter = plt.scatter(all_kd_values, all_oci_kd_values, c=all_wavelengths, cmap='viridis', edgecolor='k', alpha=0.7)
+plt.colorbar(scatter, label='Wavelength (nm)')
+plt.plot([0, 2], [0, 2], 'r--', label='1:1 Line')
+plt.xlabel('Argo in-situ Kd($\lambda$)', fontsize=18)
+plt.ylabel('PACE OCI Kd($\lambda$) ', fontsize=18)
+plt.grid(True)
+plt.xscale('log')
+plt.yscale('log')
+plt.savefig('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw/Scatter_Kd_PACE_vs_Float.png')
+plt.show()
+
 matchups.to_csv('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/Outputs/matchup_loc_withPACE.csv')
+
+#print first few lines of matchups
+print(matchups.head())
 
 #%% Make a nice map of the location of the matchups for slides
 
@@ -661,6 +883,8 @@ data = pd.DataFrame({
     'lat': matchups['lat'],
     'oci_kd442': matchups['oci_kd442']  # Ensure this column exists# Latitudes
 })
+argo_loc = points = gpd.GeoDataFrame(kd_loc, geometry=gpd.points_from_xy(kd_loc.lon, kd_loc.lat), crs="EPSG:4326")
+
 points = gpd.GeoDataFrame(data, geometry=gpd.points_from_xy(data.lon, data.lat), crs="EPSG:4326")
 green_points = points[~points['oci_kd442'].isna()]
 
@@ -671,8 +895,8 @@ fig, ax = plt.subplots(figsize=(10, 8))
 world.plot(ax=ax, color="lightgray", edgecolor="darkgrey")
 
 # Plot points on top
-points.plot(ax=ax, color="red", markersize=40,label='All Hyperspectral Argo profiles')
-green_points.plot(ax=ax, color="green", markersize=40, label = 'Matchups with level 3 Kd from PACE')
+argo_loc.plot(ax=ax, color="red", markersize=10,label='Hyperspectral profiles passing QC')
+green_points.plot(ax=ax, color="green", markersize=10, label = 'Matchups with L2 Kd from PACE')
 
 ax.legend(fontsize = 14)
 
@@ -681,96 +905,41 @@ ax.set_xlim(-180, 180)
 ax.set_ylim(-90, 90)
 ax.set_xlabel("Longitude",fontsize =16)
 ax.set_ylabel("Latitude",fontsize=16)
-plt.savefig('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/Outputs/Map_Location_Profiles.png')
+plt.savefig('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw/Map_Location_Profiles.png')
 plt.show()
 
-# %%
-wavelengths = [int(re.search(r'oci_kd(\d+)', col).group(1)) for col in matchups.columns if re.search(r'oci_kd(\d+)', col)]
+#%% Plot of the comparison of PACE Kd vs float Kd
 
+import matplotlib.pyplot as plt
+import numpy as np
+import re
 
-filesm = pd.read_csv('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/Outputs/1902685/1902685_Kd.csv')
+# Extract wavelengths and corresponding values
+wavelengths = []
+kd_values = []
+oci_kd_values = []
 
-profile_50 = filesm[filesm['profile'] == 70]
+for _, row in matchups_clean.iterrows():
+    for col in row.index:
+        match_kd = re.match(r'kd(\d+)\.0$', col)
+        match_oci_kd = re.match(r'oci_kd(\d+)$', col)
+        if match_kd:
+            wavelength = int(match_kd.group(1))
+            wavelengths.append(wavelength)
+            kd_values.append(row[col])
+            oci_kd_values.append(row[f'oci_kd{wavelength}'])
 
-wavelength_columns = [col for col in profile_50.columns if re.match(r'kd\d+\.0$', col)]
+# Convert to numpy arrays for plotting
+wavelengths = np.array(wavelengths)
+kd_values = np.array(kd_values)
+oci_kd_values = np.array(oci_kd_values)
 
-# Extract the wavelengths and corresponding values
-wavelengths = [int(re.search(r'^kd(\d+)\.0$', col).group(1)) for col in wavelength_columns if re.match(r'^kd\d+\.0$', col)]
-values = profile_50[wavelength_columns].values.flatten()
-
-# Access the uncertainties in _unc columns
-uncertainty_columns = [col for col in profile_50.columns if re.match(r'kd\d+\.0_unc$', col)]
-unc_values = profile_50[uncertainty_columns].values.flatten()
-
-
-# Extract the kd wavelengths from the matchups dataset
-wavelengths_kd = [int(re.search(r'oci_kd(\d+)', col).group(1)) for col in matchups.columns if re.search(r'oci_kd(\d+)', col)]
-# Extract the column with kd data from the matchups dataset
-kd_profile = matchups[matchups.WMO == '1902685_070']
-kd_data = kd_profile[[col for col in kd_profile.columns if re.search(r'oci_kd(\d+)', col)]]
-
-# scatter values as a function of wavelength
-plt.plot(wavelengths, values)
-plt.fill_between(wavelengths, values - unc_values, values + unc_values, color='gray', alpha=0.9, label='Uncertainty')
-plt.scatter(wavelengths_kd, kd_data.values.flatten(),color ='red')
-plt.xlabel('Wavelength (nm)')
-plt.ylabel('Kd (m^-1)')
-plt.title('Kd values for profile 70')
+# Create scatter plot
+plt.figure(figsize=(10, 8))
+scatter = plt.scatter(kd_values, oci_kd_values, c=wavelengths, cmap='viridis', edgecolor='k', alpha=0.7)
+plt.colorbar(scatter, label='Wavelength (nm)')
+plt.xlabel('Float Kd (kdXXX.0)', fontsize=14)
+plt.ylabel('Satellite Kd (oci_kdXXX)', fontsize=14)
+plt.title('Comparison of Float Kd vs Satellite Kd', fontsize=16)
+plt.grid(True)
 plt.show()
-
-
-# Interpolate kd_data to match the wavelengths of values
-interpolated_kd_data = np.interp(wavelengths_kd, wavelengths, values)
-
-# Calculate the relative difference
-relative_difference = np.abs(kd_data - interpolated_kd_data) / ((kd_data + interpolated_kd_data) / 2) * 100
-
-#Plot relative difference as a function of wavelengths_kd
-
-plt.plot(wavelengths_kd, relative_difference.values.flatten())
-plt.title('Relative difference for profile 70')
-plt.ylabel('Relative difference (%)')
-plt.show()
-
-
-# Print the relative differences
-print(relative_difference)
-# %%
-
-
-Good_matchups = matchups[matchups['oci_kd442'].notna()]
-
-
-# Ensure the 'date' column in both DataFrames is of the same type
-Good_matchups.loc[:, 'date'] = pd.to_datetime(Good_matchups['date'])
-kd_loc.loc[:, 'date'] = pd.to_datetime(kd_loc['date'])
-
-# Identify common columns
-common_columns = list(set(Good_matchups.columns) & set(kd_loc.columns))
-
-# Merge the DataFrames
-merged_df = pd.merge(Good_matchups, kd_loc, on=common_columns, how='left')
-
-# Save the merged DataFrame to a CSV file
-merged_df.to_csv('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/Outputs/merged_kd_loc_good_matchups.csv', index=False)
-
-# %%
-
-# identify members of matchups where all oci_kd is nan
-oci_kd_columns = [col for col in matchups.columns if re.match(r'oci_kd\d+', col)]
-all_nan_oci_kd_rows = matchups[oci_kd_columns].isna().all(axis=1)
-clean_matchups = matchups[~all_nan_oci_kd_rows]
-
-# Apply process_satellite_rrs to rows_with_all_nan_oci_kd
-sat_rrs_all_nan = process_satellite_rrs(rows_with_all_nan_oci_kd, sat="PACE IOP",variable_wanted= 'Kd')
-new_matchups = match_data(sat_rrs_all_nan, kd_loc,cv_max=0.8, senz_max=70.0,
-               min_percent_valid=1.0, max_time_diff=380, std_max=6)
-
-
-
-# Remove columns filled with NaN
-
-# Identify columns that match the pattern 'oci_kd'
-
-# Remove those rows from the matchups DataFrame
-matchups_cleaned = matchups[~all_nan_oci_kd_rows]

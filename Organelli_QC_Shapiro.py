@@ -111,7 +111,8 @@ def organelli16_qc(df: object, lat: object = float('nan'), lon: object = float('
             # -- Step 2: Cloud signal --
             # Check fit quality
             pd.options.mode.chained_assignment = None
-            rad[rad <= 1e-6] = 1e-6 # Minimum value from the sensor
+            rad = rad.astype(float)
+            rad[rad <= 1e-6] = 1e-6  # Minimum value from the sensor
             sel = ~flags.astype(bool)
             log_rad = np.log(pd.to_numeric(rad[sel], errors='coerce'))
 
