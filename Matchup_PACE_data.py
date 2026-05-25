@@ -13,6 +13,7 @@ import xarray as xr
 import glob
 import os
 import concurrent.futures
+import shutil
 from collections import defaultdict
 
 
@@ -247,8 +248,22 @@ def process_satellite_rrs(kd_loc, variable_wanted, sat="PACE"):
     finally:
         return pd.DataFrame(all_rows)
 def extract_rrs_wavelengths(file):
-    with xr.open_dataset(file, group="sensor_band_parameters") as ds_bands:
-        return ds_bands["wavelength_3d"].values
+    """Extract wavelengths — handles both full hyperspectral (AOP) and
+    17-band IOP products automatically."""
+    with xr.open_dataset(file, group="sensor_band_parameters") as ds:
+        print("sensor_band_parameters variables:", list(ds.variables))
+        # IOP product uses 'wavelength' or similar; AOP uses 'wavelength_3d'
+        if 'wavelength_3d' in ds.variables:
+            return ds['wavelength_3d'].values
+        elif 'wavelength' in ds.variables:
+            return ds['wavelength'].values
+        else:
+            # Fallback: infer from the Kd variable's third dimension
+            with xr.open_dataset(file, group="geophysical_data") as dg:
+                n_wl = dg['Kd'].shape[2]
+            raise ValueError(
+                f"Cannot find wavelength variable. Kd has {n_wl} bands. "
+                f"Available: {list(ds.variables)}")
 def gather_search_results(kd_loc, sat):
     """Search once per unique (date, rough lat/lon). Returns [(profile_idx, granule), ...]."""
     short_name = SAT_LOOKUP[sat]
@@ -274,108 +289,6 @@ def gather_search_results(kd_loc, sat):
         for granule in cache[key]:
             pairs.append((idx, granule))
     return pairs
-def point_in_granule_bbox(granule, lat, lon):
-    """Quick spatial check using CMR bounding rectangle/polygon metadata."""
-    try:
-        spatial = granule["umm"]["SpatialExtent"]["HorizontalSpatialDomain"]["Geometry"]
-        if "BoundingRectangles" in spatial:
-            for box in spatial["BoundingRectangles"]:
-                if (box["SouthBoundingCoordinate"] <= lat <= box["NorthBoundingCoordinate"]
-                    and box["WestBoundingCoordinate"] <= lon <= box["EastBoundingCoordinate"]):
-                    return True
-            return False
-    except (KeyError, TypeError):
-        pass
-    return True
-def process_granule_multi(granule, profile_specs, rrs_wavelengths, variable_wanted):
-    """Process one granule for all profiles that need it.
-    profile_specs = [(idx, lat, lon), ...]
-    Uses lazy reads: coarse subsample to find the rough pixel, then a small
-    full-resolution window around it, instead of pulling the whole lat/lon/data arrays.
-    """
-    try:
-        file = earthaccess.open([granule])[0]
-        ds_nav = xr.open_dataset(file, group="navigation_data")
-        ds_geo = xr.open_dataset(file, group="geophysical_data")
-    except Exception as e:
-        print(f"  open failed: {e}")
-        return []
-
-    granule_time = pd.to_datetime(
-        granule["umm"]["TemporalExtent"]["RangeDateTime"]["BeginningDateTime"])
-    exclude_mask = sum(L2_FLAGS[f] for f in EXCLUSION_FLAGS)
-    prefix = 'oci_kd' if variable_wanted == 'Kd' else 'oci_rrs'
-
-    try:
-        # Step 1: coarse subsample for cheap nearest-pixel search (one-time per granule)
-        sat_lat_coarse = ds_nav['latitude'][::8, ::8].values
-        sat_lon_coarse = ds_nav['longitude'][::8, ::8].values
-        nl_full, np_full = ds_nav['latitude'].shape
-
-        out = []
-        for prof_idx, lat, lon in profile_specs:
-            # Step 2: rough nearest on the coarse grid
-            d = (sat_lat_coarse - lat) ** 2 + (sat_lon_coarse - lon) ** 2
-            ci, cj = np.unravel_index(np.argmin(d), d.shape)
-
-            # Step 3: full-resolution window around the coarse hit
-            cl_lo = max(ci * 8 - 8, 0); cl_hi = min(ci * 8 + 8, nl_full)
-            cp_lo = max(cj * 8 - 8, 0); cp_hi = min(cj * 8 + 8, np_full)
-            lat_win = ds_nav['latitude'].isel(
-                number_of_lines=slice(cl_lo, cl_hi),
-                pixels_per_line=slice(cp_lo, cp_hi)).values
-            lon_win = ds_nav['longitude'].isel(
-                number_of_lines=slice(cl_lo, cl_hi),
-                pixels_per_line=slice(cp_lo, cp_hi)).values
-            d2 = (lat_win - lat) ** 2 + (lon_win - lon) ** 2
-            wi, wj = np.unravel_index(np.argmin(d2), d2.shape)
-            cl, cp = cl_lo + wi, cp_lo + wj
-
-            # Step 4: 5x5 box around the true nearest pixel
-            ls = max(cl - 2, 0); le = min(cl + 3, nl_full)
-            ps = max(cp - 2, 0); pe = min(cp + 3, np_full)
-            v = ds_geo[variable_wanted].isel(
-                number_of_lines=slice(ls, le),
-                pixels_per_line=slice(ps, pe)).values
-            f = ds_geo['l2_flags'].isel(
-                number_of_lines=slice(ls, le),
-                pixels_per_line=slice(ps, pe)).values
-
-            valid = np.bitwise_and(f, exclude_mask) == 0
-
-            if valid.any():
-                v_valid = v[valid]
-                mean0 = np.nanmean(v_valid, axis=0)
-                std0 = np.nanstd(v_valid, axis=0)
-                sel = np.all(np.abs(v_valid - mean0) <= 1.5 * std0, axis=1)
-                mean = np.nanmean(v_valid[sel], axis=0).flatten()
-                cv = np.nanstd(v_valid[sel], axis=0) / mean
-                cv_med = np.nanmedian(
-                    cv[(rrs_wavelengths >= 405) & (rrs_wavelengths <= 570)])
-            else:
-                cv_med = np.nan
-                mean = np.full_like(rrs_wavelengths, np.nan, dtype=float)
-
-            # Get the exact pixel coordinates (cheap — single value from the window)
-            row = {
-                'oci_datetime': granule_time,
-                'oci_cv': cv_med,
-                'oci_latitude': float(lat_win[wi, wj]),
-                'oci_longitude': float(lon_win[wi, wj]),
-                'oci_pixel_valid': int(valid.sum()),
-            }
-            for wv, mv in zip(rrs_wavelengths, mean):
-                row[f'{prefix}{int(wv)}'] = mv
-            out.append(row)
-    except Exception as e:
-        print(f"  read failed: {e}")
-        out = []
-    finally:
-        ds_nav.close()
-        ds_geo.close()
-
-    return out
-
 def process_granule_multi_local(local_path, granule, profile_specs,
                                  rrs_wavelengths, variable_wanted):
     """Same as process_granule_multi but operates on a local .nc path."""
@@ -408,26 +321,36 @@ def process_granule_multi_local(local_path, granule, profile_specs,
             f = flags_data[ls:le, ps:pe]
             valid = np.bitwise_and(f, exclude_mask) == 0
 
+            # v is (≤5, ≤5, n_wl) for 3D products (IOP) or (≤5, ≤5) for 2D.
+            # Normalise to 3D so the rest of the logic is identical.
+            if v.ndim == 2:
+                v = v[:, :, np.newaxis]
+            n_wl = v.shape[2]
+
             if valid.any():
-                v_valid = v[valid]
+                v_valid = v[valid, :]  # (n_valid_px, n_wl)
                 mean0 = np.nanmean(v_valid, axis=0)
                 std0 = np.nanstd(v_valid, axis=0)
                 sel = np.all(np.abs(v_valid - mean0) <= 1.5 * std0, axis=1)
-                mean = np.nanmean(v_valid[sel], axis=0).flatten()
-                cv = np.nanstd(v_valid[sel], axis=0) / mean
+                v_final = v_valid[sel, :]
+                n_valid_final = int(sel.sum())
+                mean = np.nanmean(v_final, axis=0).flatten()  # (n_wl,)
+                cv = np.nanstd(v_final, axis=0) / np.where(mean == 0, np.nan, mean)
                 cv_med = np.nanmedian(
                     cv[(rrs_wavelengths >= 405) & (rrs_wavelengths <= 570)])
             else:
                 cv_med = np.nan
-                mean = np.full_like(rrs_wavelengths, np.nan, dtype=float)
+                n_valid_final = 0
+                mean = np.full(len(rrs_wavelengths), np.nan, dtype=float)
 
             row = {
                 'oci_datetime': granule_time,
                 'oci_cv': cv_med,
                 'oci_latitude': sat_lat[cl, cp],
                 'oci_longitude': sat_lon[cl, cp],
-                'oci_pixel_valid': int(valid.sum()),
+                'oci_pixel_valid': n_valid_final,  # now post-sigma filter
             }
+
             for wv, mv in zip(rrs_wavelengths, mean):
                 row[f'{prefix}{int(wv)}'] = mv
             out.append(row)
@@ -593,69 +516,70 @@ def process_satellite_kd(kd_loc, sat="PACE"):
             all_rows.append(row_data)
 
     return pd.DataFrame(all_rows)
-
-def match_data(df_sat, df_aoc, cv_max=0.15, senz_max=60.0,
-               min_percent_valid=55.0, max_time_diff=180, std_max=1.5):
-    """Create matchup dataframe based on selection criteria.
-
-    Parameters
-    ----------
-    df_sat : pandas dataframe
-        Satellite data from flat validation file.
-    df_aoc : pandas dataframe
-        Field data from flat validation file.
-    cv_max : float, default 0.15
-        Maximum coefficient of variation (stdev/mean) for sat data.
-    senz_max : float, default 60.0
-        Maximum sensor zenith for sat data.
-    min_percent_valid : float, default 55.0
-        Minimum percentage of valid satellite pixels.
-    max_time_diff : int, default 180
-        Maximum time difference (minutes) between sat and field matchup.
-    std_max : float, default 1.5
-        If multiple valid field matchups, select within std_max stdevs of mean.
-
-    Returns
-    -------
-    pandas dataframe of matchups for product
+def match_data(df_sat, df_aoc,  cv_max=0.15,min_valid_pixels=10,    max_time_diff=180,  sza_max=70.0):
     """
-    # Setup
-    time_window = pd.Timedelta(minutes=max_time_diff)
-    df_match_list = []
+    Match satellite and in-situ data following Bailey & Werdell (2006).
+    Criteria applied:
+      1. CV(405-570 nm) <= cv_max  (scene homogeneity) NOT FOR KD
+      2. oci_pixel_valid >= min_valid_pixels  (>= 10 of 25 pixels)
+      3. |time difference| <= max_time_diff minutes
+      4. Solar zenith angle <= sza_max degrees  (daytime only)
+    """
+    import pvlib.solarposition as sunpos
 
-    # Ensure both datetime columns are timezone-naive
-    df_aoc['date'] = pd.to_datetime(df_aoc['date']).dt.tz_localize(None)
+    df_sat = df_sat.copy()
+    df_aoc = df_aoc.copy()
     df_sat['oci_datetime'] = pd.to_datetime(df_sat['oci_datetime']).dt.tz_localize(None)
+    df_aoc['date']         = pd.to_datetime(df_aoc['date']).dt.tz_localize(None)
 
-    # Filter Field data based on Solar Zenith
-    df_aoc_filtered = df_aoc
+    time_window = pd.Timedelta(minutes=max_time_diff)
 
-    # Filter satellite data based on cv threshold
-    #df_sat_filtered = df_sat[df_sat['oci_cv'] <= cv_max]
-    df_sat_filtered = df_sat
-    df_sat_filtered = df_sat_filtered[
-        df_sat_filtered['oci_pixel_valid'] >= min_percent_valid * 25 / 100]
+    # ── Satellite-side filters ──────────────────────────────────────────────
+    n0 = len(df_sat)
+    # # 1. CV threshold
+    # df_sat_f = df_sat_f[df_sat['oci_cv'] <= cv_max]
+    # print(f"  CV filter (≤{cv_max}):          {n0} → {len(df_sat_f)} sat rows")
+    #No CV threshold for Kd
+    df_sat_f=df_sat.copy()
+    # 2. Minimum valid pixels
+    df_sat_f = df_sat_f[df_sat_f['oci_pixel_valid'] >= min_valid_pixels]
+    print(f"  Min pixels (≥{min_valid_pixels}):       {len(df_sat_f)} sat rows remaining")
 
-    for _, sat_row in df_sat_filtered.iterrows():
-        # Filter field data based on time difference and coordinates
-        oci_datetime = pd.to_datetime(sat_row['oci_datetime'], errors='coerce').tz_localize(None)
-        time_diff = abs(df_aoc_filtered['date'] - oci_datetime)
-        within_time = time_diff <= time_window
-        within_lat = 0.2 >= abs(df_aoc_filtered['lat'] - sat_row['oci_latitude'])
-        within_lon = 0.2 >= abs(df_aoc_filtered['lon'] - sat_row['oci_longitude'])
-        field_matches = df_aoc_filtered[within_time & within_lat & within_lon]
+    # ── In-situ-side filter: solar zenith ──────────────────────────────────
+    def compute_sza(row):
+        try:
+            sp = sunpos.get_solarposition(row['date'], row['lat'], row['lon'])
+            return float(sp['zenith'].iloc[0])
+        except Exception:
+            return 90.0
 
-        if not field_matches.empty:
-            # Select the best match based on time delta
-            time_diff = abs(field_matches['date'] - oci_datetime)
-            best_match = field_matches.loc[time_diff.idxmin()]
-            df_match_list.append({**best_match.to_dict(), **sat_row.to_dict()})
-            # Add a time_diff column
-            df_match_list[-1]['time_diff'] = time_diff.min()
+    df_aoc['_sza'] = df_aoc.apply(compute_sza, axis=1)
+    n_aoc0 = len(df_aoc)
+    df_aoc_f = df_aoc[df_aoc['_sza'] <= sza_max]
+    print(f"  SZA filter  (≤{sza_max}°):       {n_aoc0} → {len(df_aoc_f)} in-situ rows")
 
-    df_match = pd.DataFrame(df_match_list)
+    # ── Spatial + temporal matching ────────────────────────────────────────
+    records = []
+    for _, sat_row in df_sat_f.iterrows():
+        oci_dt  = sat_row['oci_datetime']
+        td      = (df_aoc_f['date'] - oci_dt).abs()
+        dlat    = (df_aoc_f['lat'] - sat_row['oci_latitude']).abs()
+        dlon    = (df_aoc_f['lon'] - sat_row['oci_longitude']).abs()
+        matches = df_aoc_f[(td <= time_window) & (dlat <= 0.2) & (dlon <= 0.2)]
+        if matches.empty:
+            continue
+        best_idx  = td[matches.index].idxmin()
+        best      = matches.loc[best_idx]
+        rec       = {**best.to_dict(), **sat_row.to_dict()}
+        rec['time_diff'] = td[best_idx]
+        rec['sza']       = best['_sza']
+        records.append(rec)
+
+    df_match = pd.DataFrame(records)
+    # Drop the working column
+    df_match = df_match.drop(columns=['_sza'], errors='ignore')
+    print(f"\n  Final matchups: {len(df_match)}")
     return df_match
-
 def match_data_kd(df_sat, df_aoc):
     """Create matchup dataframe based on selection criteria.
 
@@ -751,23 +675,28 @@ kd_loc['date'] = pd.to_datetime(kd_loc['date'], format='%Y%m%d')
 kd_loc = kd_loc[kd_loc['date'] >= '2024-04-01']
 
 # Only keep profiles with QC of 2
+kd_loc_all = kd_loc.copy()
 kd_loc = kd_loc[kd_loc['quality'] != 2]
-
-
-# REtrieve the Satellite data
-#sat_cb = process_satellite_kd(kd_loc, sat="PACE KD")
 
 sat_rrs = process_satellite_rrs_fast(kd_loc, sat="PACE IOP", variable_wanted='Kd',
     max_workers=4, download_dir='/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/pace_cache',
     checkpoint_path='/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw/sat_kd_checkpoint.csv')
-
 sat_rrs.to_csv('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw/sat_kd_final.csv')
+#
+# cache_dir = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/pace_cache'
+# ckpt = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw/sat_kd_checkpoint.csv'
+# shutil.rmtree(cache_dir)
+# os.makedirs(cache_dir)
+# print(f"Cache cleared.")
+# if os.path.exists(ckpt):
+#     os.remove(ckpt)
+#     print("Checkpoint cleared.")
+# cache_dir = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/pace_cache'
+# ckpt = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw/sat_kd_checkpoint.csv'
+#
 
 # Compute matchups
-#matchups = match_data_kd(sat_cb, kd_loc)
-matchups = match_data(sat_rrs, kd_loc,cv_max=0.8, senz_max=70.0,
-               min_percent_valid=1.0, max_time_diff=380, std_max=6)
-# Remove columns filled with NaN
+matchups = match_data(sat_rrs, kd_loc, cv_max=0.8, max_time_diff=380, sza_max=70.0)
 matchups = matchups.dropna(axis=1, how='all')
 #save to csv
 matchups.to_csv('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw/matchups_PACE_Kd_L2.csv')
@@ -775,7 +704,6 @@ matchups.to_csv('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_He
 #Drop the rows where quality is 2
 matchups_clean = matchups[matchups.quality != 2]
 matchups_clean = matchups_clean.reset_index(drop=True)
-
 
 # Define a function to extract wavelengths and values
 def extract_wavelengths_and_values(row, pattern):
@@ -788,9 +716,6 @@ def extract_wavelengths_and_values(row, pattern):
 colors = plt.cm.viridis(np.linspace(0, 1, len(matchups_clean)))
 kd_symbol = 'o'
 rrs_symbol = 's'
-
-# Disable interactive mode
-plt.ioff()
 
 # Plot each row
 for idx, row in matchups_clean.iterrows():
@@ -807,11 +732,11 @@ plt.grid(True)
 plt.show()
 #$$
 
+
+
+# RElatve diff plot
 # Define colors and symbols
 colors = plt.cm.viridis(np.linspace(0, 1, len(matchups_clean)))
-
-# Disable interactive mode
-plt.ion()
 all_kd_values = []
 all_oci_kd_values = []
 all_wavelengths = []
@@ -864,82 +789,211 @@ plt.show()
 
 matchups.to_csv('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/Outputs/matchup_loc_withPACE.csv')
 
-#print first few lines of matchups
-print(matchups.head())
-
-#%% Make a nice map of the location of the matchups for slides
-
-# Load Natural Earth shapefile
-import geopandas as gpd
+#%% Make a nice map of the location of the matchups for slidesimport cartopy.crs as ccrs
+import cartopy.feature as cfeature
+import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
-import numpy as np
+import matplotlib.patches as mpatches
 
-# Load Natural Earth shapefile for countries
-world = gpd.read_file('/Users/charlotte.begouen/Downloads/ne_110m_admin_0_countries/ne_110m_admin_0_countries.shp')
+proj = ccrs.Mollweide()
 
-# Read in matchups data (assuming matchups is defined elsewhere)
-data = pd.DataFrame({
-    'lon': matchups['lon'],  # Longitudes
-    'lat': matchups['lat'],
-    'oci_kd442': matchups['oci_kd442']  # Ensure this column exists# Latitudes
-})
-argo_loc = points = gpd.GeoDataFrame(kd_loc, geometry=gpd.points_from_xy(kd_loc.lon, kd_loc.lat), crs="EPSG:4326")
+fig, ax = plt.subplots(figsize=(14, 8), subplot_kw={'projection': proj})
 
-points = gpd.GeoDataFrame(data, geometry=gpd.points_from_xy(data.lon, data.lat), crs="EPSG:4326")
-green_points = points[~points['oci_kd442'].isna()]
+ax.set_global()
+ax.add_feature(cfeature.LAND, color='#e8e8e8', zorder=1)
+ax.add_feature(cfeature.COASTLINE, edgecolor='#999999', linewidth=0.4, zorder=2)
+ax.add_feature(cfeature.BORDERS, edgecolor='#999999', linewidth=0.2, zorder=2)
+ax.spines['geo'].set_edgecolor('black')
+ax.spines['geo'].set_linewidth(1.5)
 
-# Plot
-fig, ax = plt.subplots(figsize=(10, 8))
 
-# Base map (countries)
-world.plot(ax=ax, color="lightgray", edgecolor="darkgrey")
+ax.scatter(kd_loc_all['lon'], kd_loc_all['lat'],
+           color='#aaaaaa', s=60, alpha=0.65,
+           edgecolor='white', linewidth=0.4, zorder=3,
+           transform=ccrs.PlateCarree())
 
-# Plot points on top
-argo_loc.plot(ax=ax, color="red", markersize=10,label='Hyperspectral profiles passing QC')
-green_points.plot(ax=ax, color="green", markersize=10, label = 'Matchups with L2 Kd from PACE')
+ax.scatter(kd_loc['lon'], kd_loc['lat'],
+           color='#2171b5', s=60, alpha=0.65,
+           edgecolor='white', linewidth=0.4, zorder=3,
+           transform=ccrs.PlateCarree())
 
-ax.legend(fontsize = 14)
+ax.scatter(matchups['lon'], matchups['lat'],
+           color='#e63946', s=200, alpha=0.95,
+           edgecolor='white', linewidth=0.6, zorder=4,
+           marker='*', transform=ccrs.PlateCarree())
 
-# Set axis limits
-ax.set_xlim(-180, 180)
-ax.set_ylim(-90, 90)
-ax.set_xlabel("Longitude",fontsize =16)
-ax.set_ylabel("Latitude",fontsize=16)
-plt.savefig('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw/Map_Location_Profiles.png')
+leg_handles = [
+    plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#aaaaaa',
+               markersize=20, alpha=0.8, label='All BGC-Argo profiles'),
+    plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#2171b5',
+               markersize=20, alpha=0.8, label='BGC-Argo profiles passing QC'),
+    plt.Line2D([0], [0], marker='*', color='w', markerfacecolor='#e63946',
+               markersize=30, label='PACE L2 Kd matchups'),
+]
+ax.legend(handles=leg_handles, fontsize=20, loc='lower left',
+          framealpha=0.9, edgecolor='#cccccc', frameon=True)
+
+plt.tight_layout()
+plt.savefig(
+    '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/'
+    'New_Outputs_NotRaw/Map_Location_Profiles.png',
+    dpi=250, bbox_inches='tight')
 plt.show()
 
-#%% Plot of the comparison of PACE Kd vs float Kd
 
-import matplotlib.pyplot as plt
+#%% import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import numpy as np
 import re
+from scipy import stats
 
-# Extract wavelengths and corresponding values
-wavelengths = []
-kd_values = []
-oci_kd_values = []
+# ── helpers ──────────────────────────────────────────────────────────────────
+def extract_matched_pairs(matchups_clean):
+    """Return arrays: float_kd, pace_kd, wavelength — one entry per (profile, wavelength)."""
+    float_kd, pace_kd, wls = [], [], []
+    for _, row in matchups_clean.iterrows():
+        for col in row.index:
+            m = re.match(r'kd(\d+)\.0$', col)
+            if not m:
+                continue
+            wl = int(m.group(1))
+            oci_col = f'oci_kd{wl}'
+            if oci_col not in row.index:
+                continue
+            f = row[col]
+            p = row[oci_col]
+            if np.isnan(f) or np.isnan(p) or f <= 0 or p <= 0:
+                continue
+            float_kd.append(f)
+            pace_kd.append(p)
+            wls.append(wl)
+    return np.array(float_kd), np.array(pace_kd), np.array(wls)
+def type2_regression(x, y):
+    """Geometric mean (type-II) regression on log-log data. Returns slope, intercept."""
+    lx, ly = np.log10(x), np.log10(y)
+    slope_ols = stats.linregress(lx, ly).slope
+    slope = np.sign(slope_ols) * (np.std(ly) / np.std(lx))
+    intercept = np.mean(ly) - slope * np.mean(lx)
+    return slope, intercept
 
+
+fig, ax = plt.subplots(figsize=(9, 7))
+
+# Interpolate Argo onto PACE wavelengths
+profile_curves = []
 for _, row in matchups_clean.iterrows():
-    for col in row.index:
-        match_kd = re.match(r'kd(\d+)\.0$', col)
-        match_oci_kd = re.match(r'oci_kd(\d+)$', col)
-        if match_kd:
-            wavelength = int(match_kd.group(1))
-            wavelengths.append(wavelength)
-            kd_values.append(row[col])
-            oci_kd_values.append(row[f'oci_kd{wavelength}'])
+    argo_wls, argo_vals = extract_wavelengths_and_values(row, r'kd(\d+)\.0$')
+    pace_wls, pace_vals = extract_wavelengths_and_values(row, r'oci_kd(\d+)$')
 
-# Convert to numpy arrays for plotting
-wavelengths = np.array(wavelengths)
-kd_values = np.array(kd_values)
-oci_kd_values = np.array(oci_kd_values)
+    argo_wls = np.array(argo_wls, dtype=float)
+    argo_vals = np.array(pd.to_numeric(argo_vals, errors='coerce'), dtype=float)
+    pace_wls = np.array(pace_wls, dtype=float)
+    pace_vals = np.array(pd.to_numeric(pace_vals, errors='coerce'), dtype=float)
+    argo_ok = ~np.isnan(argo_vals)
+    pace_ok = ~np.isnan(pace_vals)
+    if argo_ok.sum() < 3 or pace_ok.sum() < 3:
+        continue
 
-# Create scatter plot
-plt.figure(figsize=(10, 8))
-scatter = plt.scatter(kd_values, oci_kd_values, c=wavelengths, cmap='viridis', edgecolor='k', alpha=0.7)
-plt.colorbar(scatter, label='Wavelength (nm)')
-plt.xlabel('Float Kd (kdXXX.0)', fontsize=14)
-plt.ylabel('Satellite Kd (oci_kdXXX)', fontsize=14)
-plt.title('Comparison of Float Kd vs Satellite Kd', fontsize=16)
-plt.grid(True)
+    # Sort by wavelength before interpolating
+    argo_sort = np.argsort(argo_wls[argo_ok])
+    argo_wls_sorted = argo_wls[argo_ok][argo_sort]
+    argo_vals_sorted = argo_vals[argo_ok][argo_sort]
+
+    argo_interp = np.interp(pace_wls, argo_wls_sorted, argo_vals_sorted,
+                            left=np.nan, right=np.nan)
+
+    both_ok = pace_ok & ~np.isnan(argo_interp) & (argo_interp > 0) & (pace_vals > 0)
+    if both_ok.sum() < 3:
+        continue
+
+    rel_diff = (pace_vals[both_ok] - argo_interp[both_ok]) / argo_interp[both_ok] * 100
+    profile_curves.append((pace_wls[both_ok], rel_diff))
+# ── Individual profile curves in light gray ───────────────────────────────
+for wls_used, rd in profile_curves:
+    ax.plot(wls_used, rd, color='lightgray', lw=0.8, alpha=0.6, zorder=1)
+
+# ── Per-wavelength median ± IQR ───────────────────────────────────────────
+rd_by_wl = {wl: [] for wl in pace_wls}
+for wls_used, rd in profile_curves:
+    for wl, v in zip(wls_used, rd):
+        rd_by_wl[wl].append(v)
+
+wl_plot  = np.array([wl for wl in pace_wls if len(rd_by_wl[wl]) >= 3])
+medians  = np.array([np.median(rd_by_wl[wl]) for wl in wl_plot])
+q25      = np.array([np.percentile(rd_by_wl[wl], 25) for wl in wl_plot])
+q75      = np.array([np.percentile(rd_by_wl[wl], 75) for wl in wl_plot])
+
+ax.axhline(0, color='k', lw=1, ls='--', zorder=2)
+ax.fill_between(wl_plot, q25, q75, alpha=0.35, color='steelblue', zorder=3, label='Interquartile')
+ax.plot(wl_plot, medians, color='steelblue', lw=2.5, zorder=4, label='Median bias')
+
+ax.set_xlabel('Wavelength (nm)', fontsize=15)
+ax.set_ylabel('Relative Difference (%)', fontsize=15)
+ax.set_ylim(-100, 150)   # or whatever range shows the bulk of the data
+ax.legend(fontsize=14, loc='upper right')
+ax.tick_params(axis='both', which='major', labelsize=12)
+ax.grid(True, alpha=0.25)
+plt.tight_layout()
+plt.savefig(
+    '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/'
+    'New_Outputs_NotRaw/Spectral_Bias_ribbon.png', dpi=200)
+plt.show()
+
+fig, ax = plt.subplots(figsize=(9, 8))
+
+float_kd = np.array(all_kd_values)
+pace_kd  = np.array(all_oci_kd_values)
+wls      = np.array(all_wavelengths)
+rel_diff = (pace_kd - float_kd) / float_kd * 100
+
+unique_wls   = np.sort(np.unique(wls))
+colors_rgb   = np.array([wavelength_to_rgb(w) for w in wls])
+unique_colors= np.array([wavelength_to_rgb(w) for w in unique_wls])
+wl_min, wl_max = wls.min(), wls.max()
+spec_cmap = mcolors.LinearSegmentedColormap.from_list(
+    'spectrum', list(zip(
+        (unique_wls - wl_min) / (wl_max - wl_min),
+        unique_colors)))
+norm = mcolors.Normalize(vmin=wl_min, vmax=wl_max)
+
+sc = ax.scatter(float_kd, pace_kd, c=colors_rgb,
+                alpha=0.75, edgecolor='none', s=40, zorder=3)
+cb = plt.colorbar(mcm.ScalarMappable(norm=norm, cmap=spec_cmap), ax=ax)
+cb.set_label('Wavelength (nm)', fontsize=18)
+cb.ax.tick_params(labelsize=15)
+
+lims = [min(float_kd.min(), pace_kd.min()) * 0.8,
+        max(float_kd.max(), pace_kd.max()) * 1.2]
+ax.plot(lims, lims, 'k--', lw=1.4, label='1:1', zorder=2)
+
+slope, intercept = type2_regression(float_kd, pace_kd)
+x_fit = np.logspace(np.log10(lims[0]), np.log10(lims[1]), 200)
+y_fit = 10 ** (intercept + slope * np.log10(x_fit))
+ax.plot(x_fit, y_fit, color='dimgray', lw=1.8,
+        label=f'Type-II (slope={slope:.2f})', zorder=2)
+
+r2   = np.corrcoef(np.log10(float_kd), np.log10(pace_kd))[0, 1] ** 2
+bias = np.median(rel_diff)
+rmse = np.sqrt(np.mean((np.log10(pace_kd) - np.log10(float_kd)) ** 2))
+n    = len(float_kd)
+stats_txt = (f'N = {n}\n'
+             f'R² = {r2:.3f}\n'
+             f'Bias = {bias:+.1f}%\n'
+             f'Log RMSE = {rmse:.3f}')
+ax.text(0.04, 0.97, stats_txt, transform=ax.transAxes,
+        va='top', ha='left', fontsize=14,
+        bbox=dict(boxstyle='round,pad=0.4', fc='white', alpha=0.85,
+                  edgecolor='#cccccc'))
+
+ax.set_xscale('log'); ax.set_yscale('log')
+ax.set_xlim(lims);    ax.set_ylim(lims)
+ax.set_xlabel('Argo in-situ Kd(λ)', fontsize=20)
+ax.set_ylabel('PACE OCI Kd(λ)', fontsize=20)
+ax.tick_params(axis='both', labelsize=16)
+ax.legend(fontsize=14, loc='lower right')
+ax.grid(True, which='both', alpha=0.25)
+plt.tight_layout()
+plt.savefig(
+    '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/'
+    'New_Outputs_NotRaw/Scatter_Kd_polished.png', dpi=200)
 plt.show()

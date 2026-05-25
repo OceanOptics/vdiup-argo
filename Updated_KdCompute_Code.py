@@ -134,7 +134,6 @@ def find_ed_n_prof(data):
         if 'DOWN_IRRADIANCE_SPECTRUM' in params:
             return n
     return None
-
 def quick_plot_ed_profile(Ed_profile, wavelengths, wmo, current_cycle,
                           target_wavelengths=PLOT_DIAGNOSTIC_WAVELENGTHS):
     """Diagnostic: 5 single-wavelength panels + full spectrum heatmap vs depth."""
@@ -798,8 +797,8 @@ if __name__ == '__main__':
             'platform_id': wmo,
             'instrument_manufacturer': 'TriOS',
             'instrument_model': 'RAMSES',
-            'documents': 'PVST_VDIUP_float_documentation.pdf',
-            'calibration_files': 'NA_GDAC_processed',  # was the cals/ AllCal.txt
+            'documents': 'PVST_VDIUP_float_documentation_R2.pdf',
+            'calibration_files': 'no_cal_files',  # was the cals/ AllCal.txt
             'data_type': 'drifter',
             'data_status': 'preliminary',
             'water_depth': 'NA',
