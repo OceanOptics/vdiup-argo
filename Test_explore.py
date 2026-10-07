@@ -13,14 +13,10 @@ import Organelli_QC_Shapiro
 import matplotlib.gridspec as gridspec
 import subprocess
 root = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve'
-Processed_profiles = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs'
+Processed_profiles = ('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs')
 import matplotlib.pyplot as plt
 
 # %% Download all the profiles from the floats from the GDAC
-
-# First, have to download all the profiles from the floats from the GDAC, will be done using terminal commamd.
-# Also will need to update floats that have new profiles since last processing.
-
 df = pd.read_table(os.path.join(root, 'WMOvsNSerie.txt'))
 list_wmo = df['WMO'].unique() # Floats we know to be hyperspectral that we process in this code
 
@@ -696,6 +692,14 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             Kd_uncertainty = std_luf_kd/np.sqrt(10)  # Take standard error = std/sqt(100)
         else:
             Kd_uncertainty = pd.Series([np.nan] * len(wavelengths))
+
+
+        if ~(np.isnan(median_luf_kd)).all():
+            result_Kd = result_Kd.mask(result_Kd < 0, np.nan)
+            # Calculate uncertainties
+            Kd_uncertainty = std_luf_kd/np.sqrt(10)  # Take standard error = std/sqt(100)
+        else:
+            Kd_uncertainty = pd.Series([np.nan] * len(wavelengths))
             std_Ed0 = pd.Series([np.nan] * len(wavelengths))
 
         data_dict_K ={
@@ -841,13 +845,20 @@ plot_ed_profiles(df = Ed_all,wmo =  wmo, kd_df =Kd, wv_target = [490, 550, 660],
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
+import matplotlib.patheffects as pe
 
 # Filter the DataFrame to get rows where profile == 8 and depth is <= 100 meters
 # filtered_df = Ed_all[(Ed_all['profile'] == 49) & (Ed_all['depth'] <= 100)]
+cycle = 1
+Ed_profile = Ed_all[Ed_all['profile'] ==cycle]
 filtered_df = Ed_profile[Ed_profile['depth'] <= 100]
-
+filtered_df = filtered_df.loc[:124]
 # Extract the columns that start with 'ed'
 ed_columns = [col for col in filtered_df.columns if col.startswith('ed')]
+
+# Filter Kd and Ed0 tables for the current cycle
+kd_row = Kd[Kd['profile'] == cycle]
+ed0_row = Ed0[Ed0['profile'] == cycle]
 
 # Plot the ed values as a function of wavelength for each row
 fig = plt.figure(figsize=(12, 10))
@@ -861,10 +872,9 @@ for idx, (row, color) in enumerate(zip(filtered_df.iterrows(), colors)):
 
 # Add labels and title
 ax1.set_xlabel('Wavelength (nm)',fontsize=20)
-ax1.set_ylabel(r'$E_d$ (W m$^{-2}$ nm$^{-1}$)', fontsize=27)
-ax1.set_title('Float ' + wmo+ ' $E_d$ Spectra for profile #2',fontsize=26)
+ax1.set_ylabel(r'$E_d$ ($\mu$W cm$^{-2}$ nm$^{-1}$)', fontsize=27)
+ax1.set_title('Float ' + wmo+ f' $E_d$ Spectra for profile #{cycle}',fontsize=26)
 ax1.tick_params(axis='both', which='major', labelsize=18)
-
 
 # Create a color bar
 norm = mcolors.Normalize(vmin=0, vmax=100)
@@ -876,10 +886,6 @@ cbar.ax.tick_params(labelsize=18)
 
 # Bottom plots: Depth as a function of Ed for specific wavelengths
 gs_bottom = gridspec.GridSpecFromSubplotSpec(1, 5, subplot_spec=gs[1])
-
-# Define the specific wavelengths and colors
-
-# Function to find the closest wavelengths
 specific_wavelengths = find_closest_wavelengths( [380.0, 440.0, 490.0, 555.0, 620.0],wavelengths)
 plot_colors = ['purple','indigo', 'lightblue', 'green', 'red']
 
@@ -888,6 +894,19 @@ for i, (wavelength, plot_color) in enumerate(zip(specific_wavelengths, plot_colo
     ed_column = f'ed{wavelength}'
     for idx, row in filtered_df.iterrows():
         ax.scatter(row[ed_column], row['depth'], color=plot_color, alpha=0.7, marker='o')
+        # --- Kd exponential fit (new) ---
+    kd_col = f'kd{wavelength}'
+    ed0_col = f'ed0{wavelength}'
+    if (not kd_row.empty and not ed0_row.empty and kd_col in Kd.columns and ed0_col in Ed0.columns):
+        kd_val = kd_row[kd_col].values[0]
+        ed0_val = ed0_row[ed0_col].values[0]
+
+        if np.isfinite(kd_val) and np.isfinite(ed0_val) and kd_val > 0:
+            z_fit = np.linspace(0, filtered_df['depth'].max(), 300)
+            ed_fit = ed0_val * np.exp(-kd_val * z_fit)
+            ax.plot(ed_fit, z_fit, color='yellow', linewidth=1.5, linestyle='--', zorder=5,
+                    path_effects=[pe.withStroke(linewidth=3.5, foreground='k')])
+
     if i == 0:
         ax.set_ylabel('Depth (m)', fontsize=24)
     else:
@@ -897,7 +916,11 @@ for i, (wavelength, plot_color) in enumerate(zip(specific_wavelengths, plot_colo
     ax.invert_yaxis()  # Reverse the depth axis
 
 plt.tight_layout()
+plt.savefig(f'float_{wmo}_Ed_spectra_profile_{cycle}.png', dpi=300)
 plt.show()
+
+
+
 
 #%% Simple plot of 1 kd spectra
 

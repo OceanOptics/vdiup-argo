@@ -173,6 +173,62 @@ def _decode(x, default=''):
     if isinstance(x, str):
         return x.strip()
     return default
+def load_wavelengths_from_meta(wmo, root):
+    """Reconstruct DOWN_IRRADIANCE_SPECTRUM wavelengths from {wmo}_meta_aux.nc.
+    Uses the PREDEPLOYMENT_CALIB_COEFFICIENT polynomial for DOWN_IRRADIANCE_SPECTRUM
+    together with LAUNCH_CONFIG_PARAMETER pixel/binning parameters.
+    Returns a 1-D float ndarray of wavelengths (rounded to nearest nm), or None.
+    """
+    import re
+    meta_path = os.path.join(root, wmo, f'{wmo}_meta_aux.nc')
+    if not os.path.exists(meta_path):
+        return None
+    try:
+        ds = xr.open_dataset(meta_path)
+        params = [_decode(p) for p in ds.PARAMETER.values]
+        if 'DOWN_IRRADIANCE_SPECTRUM' not in params:
+            ds.close(); return None
+        i = params.index('DOWN_IRRADIANCE_SPECTRUM')
+        coeff_str = _decode(ds.PREDEPLOYMENT_CALIB_COEFFICIENT.values[i])
+
+        coeffs = {}
+        for cname in ('c0s', 'c1s', 'c2s', 'c3s', 'c4s'):
+            m = re.search(rf'{cname}\s*=\s*([\-0-9eE\.\+]+)', coeff_str)
+            if m:
+                coeffs[cname] = float(m.group(1))
+        if len(coeffs) < 5:
+            ds.close(); return None
+
+        cfg_names = [_decode(n) for n in ds.LAUNCH_CONFIG_PARAMETER_NAME.values]
+        cfg_vals  = np.asarray(ds.LAUNCH_CONFIG_PARAMETER_VALUE.values).flatten()
+        def _cfg(name):
+            for n, v in zip(cfg_names, cfg_vals):
+                if n == name:
+                    return int(float(v))
+            return None
+        imin = _cfg('CONFIG_RamsesAccOutputPixelBegin_NUMBER')
+        imax = _cfg('CONFIG_RamsesAccOutputPixelEnd_NUMBER')
+        nbin = _cfg('CONFIG_RamsesAccOutputBinningSize_NUMBER')
+        ds.close()
+        if None in (imin, imax, nbin) or nbin < 1:
+            return None
+
+        i_full  = np.arange(1, 256)
+        wv_full = (coeffs['c0s']
+                   + coeffs['c1s'] * (i_full + 1)
+                   + coeffs['c2s'] * (i_full + 1) ** 2
+                   + coeffs['c3s'] * (i_full + 1) ** 3
+                   + coeffs['c4s'] * (i_full + 1) ** 4)
+        wv_sel  = wv_full[imin - 1: imax]
+        n_vals  = len(wv_sel) // nbin
+        wv_binned = wv_sel[:n_vals * nbin].reshape(n_vals, nbin).mean(axis=1)
+        result = np.round(wv_binned).astype(float)
+        print(f"  Reconstructed {len(result)} wavelengths from {wmo}_meta_aux.nc "
+              f"({result[0]:.0f}–{result[-1]:.0f} nm)")
+        return result
+    except Exception as e:
+        print(f"  Meta-file wavelength reconstruction failed for {wmo}: {e}")
+        return None
 def read_ed_from_aux(filename, fallback_wavelengths=None):
     try:
         data = xr.open_dataset(filename)
@@ -201,14 +257,15 @@ def read_ed_from_aux(filename, fallback_wavelengths=None):
     else:
         ed_arr = data.DOWN_IRRADIANCE_SPECTRUM.sel(N_PROF=n_prof).values
 
+
+    OLD_LONG_NAME = "Downwelling irradiance spectrum"
+    long_name = data['DOWN_IRRADIANCE_SPECTRUM'].attrs.get('long_name', '')
+    if long_name.strip() == OLD_LONG_NAME:
+        ed_arr = ed_arr * 1e-2
+
     pres = data.PRES.sel(N_PROF=n_prof).values
     mtime = data.MTIME.sel(N_PROF=n_prof).values
 
-    # --- Wavelengths -----------------------------------------------------
-    # Some aux files don't carry DOWN_IRRADIANCE_SPECTRUM_WAVELENGTHS at all,
-    # or carry it but with all-NaN values. Wavelengths are fixed per instrument,
-    # so we accept a fallback array (typically cached from another cycle of the
-    # same float).
     wavelengths = None
     if 'DOWN_IRRADIANCE_SPECTRUM_WAVELENGTHS' in data.variables:
         wv_arr = data.DOWN_IRRADIANCE_SPECTRUM_WAVELENGTHS.sel(N_PROF=n_prof).values
@@ -265,7 +322,7 @@ def read_ed_from_aux(filename, fallback_wavelengths=None):
         'n_prof': n_prof,
         'data_mode': ed_mode,
     }
-def bootstrap_fit_klu_depth(df, speed, wavelengths, n_iterations=10):
+def bootstrap_fit_klu_depth(df, speed, wavelengths, n_iterations):
     """Bootstrap Kd and Ed0 by perturbing depth and dropping random samples."""
     bootstrap_kd = []
     bootstrap_ed0 = []
@@ -334,7 +391,7 @@ def plot_ed_profiles(df, wmo, kd_df, wv_target, wv_og, ed0, flags_df, depth_col=
             print(f"Could not find profile number for cycle {cycle}")
             continue
 
-        figure_path = os.path.join(PROCESSED_PROFILES, wmo, f"{wmo}_{profile_number}_f9ig.png")
+        figure_path = os.path.join(PROCESSED_PROFILES, wmo, f"{wmo}_{profile_number}_fig.png")
         if os.path.exists(figure_path):
             print(f"Figure already exists at {figure_path}")
             continue
@@ -471,7 +528,6 @@ def detect_and_median_bin_bursts(Ed_profile, bin_resolution=0.1,
     binned = binned[[c for c in Ed_profile.columns if c in binned.columns]]
     return binned, True, n_collapsed
 
-
 def process_cycle(filename, base_filename, wmo, current_cycle, fallback_wavelengths=None):
     """Build the Ed dataframe + flags for one cycle. Returns dict or None."""
     if '001D' in filename:
@@ -563,9 +619,8 @@ def process_cycle(filename, base_filename, wmo, current_cycle, fallback_waveleng
 
     # --- PAR ---
     # Original code converted Ed_profile values from uW/cm^2/nm to W/m^2/nm via *1e-2.
-    # The GDAC unit attribute says W/m^2/nm but the magnitudes match uW/cm^2/nm,
-    # so we keep the *1e-2 factor. Verify against a known cycle if in doubt.
-    irr_conv = Ed_profile[wavelengths] * 1e-2
+    # The GDAC unit attribute says W/m^2/nm but the magnitudes matched uW/cm^2/nm
+    irr_conv = Ed_profile[wavelengths]
     photon_factor = np.array(wavelengths) * 1e-9 / (2.998e8 * 6.62606957e-34)
     par_band = (np.array(wavelengths) >= 350) & (np.array(wavelengths) <= 700)
     Ed_profile['Epar'] = (np.trapz((np.array(irr_conv)[:, par_band] * photon_factor[par_band]))
@@ -776,7 +831,6 @@ if __name__ == '__main__':
         flags_dataframes = []
         Ed_physic = pd.DataFrame()
 
-        # --- Incremental processing: load any existing CSVs and skip those cycles ---
         if FORCE_REPROCESS:
             existing_Kd = pd.DataFrame()
             existing_Ed0 = pd.DataFrame()
@@ -817,6 +871,9 @@ if __name__ == '__main__':
             if len(cached) > 0 and not np.isnan(cached).all():
                 float_wv_cache = cached
 
+        if float_wv_cache is None:
+            float_wv_cache = load_wavelengths_from_meta(wmo, ROOT)
+
         for filename in aux_files:
             base = os.path.basename(filename)
             # Skip files whose WMO in the name doesn't match the directory's WMO.
@@ -841,7 +898,7 @@ if __name__ == '__main__':
 
 
             cycle_data = process_cycle(filename, base_filename, wmo, current_cycle,
-                                       fallback_wavelengths=None)
+                                       fallback_wavelengths=float_wv_cache)
             if cycle_data is None:
                 continue
 
@@ -1042,21 +1099,16 @@ if __name__ == '__main__':
 
         ROOT = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve'
 
-
         def _decode(x, default=''):
             if isinstance(x, bytes): return x.decode().strip()
             if isinstance(x, str): return x.strip()
             return default
-
-
         def find_ed_n_prof(data):
             sp = data.STATION_PARAMETERS.values
             for n in range(sp.shape[0]):
                 if 'DOWN_IRRADIANCE_SPECTRUM' in [_decode(p) for p in sp[n]]:
                     return n
             return None
-
-
         def cycle_is_burst(aux_path):
             """Return (was_burst, max_per_shallow_bin). max_per_shallow_bin = 0 if no data."""
             try:
