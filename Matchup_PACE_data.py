@@ -20,7 +20,7 @@ from pathlib import Path
 from shared.colors import wavelength_to_rgb
 
 PATH_TO_DATA_IN = Path('/Volumes/SD/VDIUP/Argo/CBD/New_Outputs_NotRaw')
-PATH_TO_DATA_OUT = Path('/Volumes/SD/VDIUP/Argo/Matchups')
+PATH_TO_DATA_OUT = Path('/Volumes/SD/VDIUP/Argo/matchups')
 PATH_TO_FIGS = Path('/Volumes/SD/VDIUP/Argo/Matchups/Figs')
 
 # Following is taken from PACE hackweek
@@ -379,7 +379,7 @@ def process_satellite_rrs_fast(kd_loc, variable_wanted, sat="PACE IOP",
     """
     import os, time
     if download_dir is None:
-        download_dir = os.path.expanduser("~/pace_granule_cache")
+        download_dir = Path.cwd() / "pace_granule_cache"
     os.makedirs(download_dir, exist_ok=True)
 
     # ---- Phase 1: search + dedup ----
@@ -412,11 +412,11 @@ def process_satellite_rrs_fast(kd_loc, variable_wanted, sat="PACE IOP",
     t0 = time.time()
     granules_to_download = [granule_objs[g] for g in todo_gids]
     # earthaccess.download handles parallelism, retries, resumption internally
+    earthaccess.login()
     local_paths = earthaccess.download(granules_to_download, download_dir, threads=8)
     # Map back: gid -> local path
     gid_to_path = dict(zip(todo_gids, local_paths))
-    print(f"  download done in {(time.time() - t0) / 60:.1f} min "
-          f"({len(local_paths)} files, {(time.time() - t0) / len(local_paths):.1f} s/file)")
+    print(f"  download done in {(time.time() - t0) / 60:.1f} min ({len(local_paths)} files)")
 
     # ---- Phase 3: process local files (fast, parallel, no network) ----
     rrs_wavelengths = extract_rrs_wavelengths(local_paths[0])
@@ -456,6 +456,8 @@ def process_satellite_rrs_fast(kd_loc, variable_wanted, sat="PACE IOP",
         pd.DataFrame(all_rows).to_csv(checkpoint_path, index=False)
     print(f"  done: {len(all_rows)} rows, {n_error} errors")
     return pd.DataFrame(all_rows).drop(columns=['_gid'], errors='ignore')
+
+
 def process_satellite_kd(kd_loc, sat="PACE"):
     """
     Download and process satellite data for matchups.
@@ -522,6 +524,8 @@ def process_satellite_kd(kd_loc, sat="PACE"):
             all_rows.append(row_data)
 
     return pd.DataFrame(all_rows)
+
+
 def match_data(df_sat, df_aoc,  cv_max=0.15,min_valid_pixels=10,    max_time_diff=180,  sza_max=70.0):
     """
     Match satellite and in-situ data following Bailey & Werdell (2006).
@@ -587,6 +591,8 @@ def match_data(df_sat, df_aoc,  cv_max=0.15,min_valid_pixels=10,    max_time_dif
     df_match = df_match.drop(columns=['_sza'], errors='ignore')
     print(f"\n  Final matchups: {len(df_match)}")
     return df_match
+
+
 def match_data_kd(df_sat, df_aoc):
     """Create matchup dataframe based on selection criteria.
 
@@ -661,16 +667,16 @@ for file in csv_files:
     wmo = os.path.basename(file).split('_Kd.csv')[0]
 
     kd_file = pd.read_csv(file)
-    temp_df = pd.DataFrame()
-    temp_df['date'] = pd.to_datetime(kd_file['date'].astype(str) + ' ' + kd_file['time'])
-    temp_df['lat'] = kd_file['lat']
-    temp_df['lon'] = kd_file['lon']
-    temp_df['WMO'] = [f"{wmo}_{str(profile).zfill(3)}" for profile in kd_file['profile']]
-    temp_df['quality'] = kd_file['quality']
-
-    # Include all columns matching kdXXX.0 and kdXXX.0_unc
-    for col in all_columns:
-        temp_df[col] = kd_file[col] if col in kd_file.columns else np.nan
+    base_cols = {
+        'date': pd.to_datetime(kd_file['date'].astype(str) + ' ' + kd_file['time']),
+        'lat': kd_file['lat'],
+        'lon': kd_file['lon'],
+        'WMO': [f"{wmo}_{str(profile).zfill(3)}" for profile in kd_file['profile']],
+        'quality': kd_file['quality'],
+    }
+    # Built at once to avoid DataFrame fragmentation
+    kd_cols = {col: (kd_file[col] if col in kd_file.columns else np.nan) for col in all_columns}
+    temp_df = pd.DataFrame({**base_cols, **kd_cols}, index=kd_file.index)
 
     # Append the DataFrame to the list
     data.append(temp_df)
@@ -736,7 +742,7 @@ plt.xlabel('Wavelength (nm)')
 plt.ylabel('Values')
 plt.title('Kd and OCI Kd vs Wavelengths')
 plt.grid(True)
-plt.show()
+plt.show(block=False)
 #$$
 
 
@@ -778,7 +784,7 @@ plt.xlabel('Wavelength (nm)')
 plt.ylabel('Relative Difference (%)')
 plt.title('Relative Difference between OCI Kd and Kd')
 plt.grid(True)
-plt.show()
+plt.show(block=False)
 
 
 # Create the scatter plot
@@ -786,13 +792,13 @@ plt.figure(figsize=(10, 8))
 scatter = plt.scatter(all_kd_values, all_oci_kd_values, c=all_wavelengths, cmap='viridis', edgecolor='k', alpha=0.7)
 plt.colorbar(scatter, label='Wavelength (nm)')
 plt.plot([0, 2], [0, 2], 'r--', label='1:1 Line')
-plt.xlabel('Argo in-situ Kd($\lambda$)', fontsize=18)
-plt.ylabel('PACE OCI Kd($\lambda$) ', fontsize=18)
+plt.xlabel(r'Argo in-situ Kd($\lambda$)', fontsize=18)
+plt.ylabel(r'PACE OCI Kd($\lambda$) ', fontsize=18)
 plt.grid(True)
 plt.xscale('log')
 plt.yscale('log')
 plt.savefig(PATH_TO_FIGS / 'Scatter_Kd_PACE_vs_Float.png')
-plt.show()
+plt.show(block=False)
 
 matchups.to_csv(PATH_TO_DATA_OUT / 'matchup_loc_withPACE.csv')
 
@@ -842,7 +848,7 @@ ax.legend(handles=leg_handles, fontsize=20, loc='lower left',
 
 plt.tight_layout()
 plt.savefig(PATH_TO_FIGS / 'Map_Location_Profiles.png', dpi=250, bbox_inches='tight')
-plt.show()
+plt.show(block=False)
 
 
 #%% import matplotlib.pyplot as plt
@@ -939,7 +945,7 @@ ax.tick_params(axis='both', which='major', labelsize=12)
 ax.grid(True, alpha=0.25)
 plt.tight_layout()
 plt.savefig(PATH_TO_FIGS/ 'Spectral_Bias_ribbon.png', dpi=200)
-plt.show()
+plt.show(block=False)
 
 fig, ax = plt.subplots(figsize=(9, 8))
 

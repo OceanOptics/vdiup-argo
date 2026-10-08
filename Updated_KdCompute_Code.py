@@ -234,6 +234,15 @@ def load_wavelengths_from_meta(wmo, root):
     except Exception as e:
         print(f"  Meta-file wavelength reconstruction failed for {wmo}: {e}")
         return None
+def _ylim_kwargs(values, lo, hi):
+    """Return {'ylim': [...]} or {} when values are all NaN/non-finite."""
+    v = np.asarray(values, dtype=float)
+    v = v[np.isfinite(v)]
+    if v.size == 0:
+        return {}
+    return {'ylim': [lo * v.min(), hi * v.max()]}
+
+
 def read_ed_from_aux(filename, fallback_wavelengths=None):
     try:
         data = xr.open_dataset(filename)
@@ -269,7 +278,16 @@ def read_ed_from_aux(filename, fallback_wavelengths=None):
         ed_arr = ed_arr * 1e-2
 
     pres = data.PRES.sel(N_PROF=n_prof).values
-    mtime = data.MTIME.sel(N_PROF=n_prof).values
+    mtime_name = next((v for v in ('MTIME', 'DOWN_IRRADIANCE_SPECTRUM_MTIME')
+                       if v in data.variables), None)
+    if mtime_name is None:
+        mtime_name = next((v for v in data.variables if str(v).endswith('MTIME')), None)
+    if mtime_name is not None:
+        mtime = data[mtime_name].sel(N_PROF=n_prof).values
+    else:
+        print(f"  No MTIME variable in {os.path.basename(filename)}; "
+              "depth correction will be skipped")
+        mtime = np.full(pres.shape, np.nan)
 
     wavelengths = None
     if 'DOWN_IRRADIANCE_SPECTRUM_WAVELENGTHS' in data.variables:
@@ -435,7 +453,7 @@ def plot_ed_profiles(df, wmo, kd_df, wv_target, wv_og, ed0, flags_df, depth_col=
         ax1.set(xlabel='Wavelength (nm)', ylabel='Ed(0-) Values',
                 title='Hyperspectral Ed(0-)',
                 xlim=[min(wv_og), 700],
-                ylim=[0.90 * np.nanmin(ed0_values), 1.20 * np.nanmax(ed0_values)])
+                **_ylim_kwargs(ed0_values, 0.90, 1.20))
 
         ax2.plot(wv_og, kd_values, color='blue', linewidth=2)
         ax2.fill_between(wv_og, kd_values - kd_unc_values, kd_values + kd_unc_values,
@@ -443,7 +461,7 @@ def plot_ed_profiles(df, wmo, kd_df, wv_target, wv_og, ed0, flags_df, depth_col=
         ax2.set(xlabel='Wavelength (nm)', ylabel='Kd Values',
                 title='Hyperspectral Kd',
                 xlim=[min(wv_og), 700],
-                ylim=[0.90 * np.nanmin(kd_values), 1.05 * np.nanmax(kd_values)])
+                **_ylim_kwargs(kd_values, 0.90, 1.05))
 
         colors = ['blue', 'green', 'red']
         for idx, (ed_col, kd_col, ed0_col, ax) in enumerate(zip(
@@ -564,6 +582,8 @@ def process_cycle(filename, base_filename, wmo, current_cycle, fallback_waveleng
         # MTIME is float days relative to JULD; NaN becomes NaT
         mt = pd.to_timedelta(mt, unit='D', errors='coerce').to_numpy()
     DT = pd.to_datetime(np.array([juld] * n) - mt)
+    if DT.isna().any():
+        DT = pd.to_datetime(np.array([juld] * n))
 
     speed = np.full(n, np.nan)
     for i in range(1, n):
@@ -571,7 +591,7 @@ def process_cycle(filename, base_filename, wmo, current_cycle, fallback_waveleng
         dpres = pres_ed[i] - pres_ed[i - 1]
         if dt > 0:
             speed[i] = dpres / dt
-    delta_depth = speed * 2
+    delta_depth = np.where(np.isnan(speed), 0.0, speed * 2)
     depth = pres_ed - delta_depth
     depth[0] = pres_ed[0] - delta_depth[1] if n > 1 else pres_ed[0]
 
