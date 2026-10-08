@@ -1,5 +1,6 @@
 # Matchup our Kd matchups with PACE data. Retrive # of matchup and performance of Kd retrievals
 import earthaccess
+import matplotlib.cm as mcm
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import matplotlib.style as style
@@ -14,8 +15,13 @@ import os
 import concurrent.futures
 import shutil
 from collections import defaultdict
+from pathlib import Path
 
+from shared.colors import wavelength_to_rgb
 
+PATH_TO_DATA_IN = Path('/Volumes/SD/VDIUP/Argo/CBD/New_Outputs_NotRaw')
+PATH_TO_DATA_OUT = Path('/Volumes/SD/VDIUP/Argo/Matchups')
+PATH_TO_FIGS = Path('/Volumes/SD/VDIUP/Argo/Matchups/Figs')
 
 # Following is taken from PACE hackweek
 # Satellite Matchup Constants
@@ -244,8 +250,9 @@ def process_satellite_rrs(kd_loc, variable_wanted, sat="PACE"):
                     print(f"Error processing {date}, {latitude}, {longitude}: {e}")
     except KeyboardInterrupt:
         print("Processing interrupted by user.")
-    finally:
-        return pd.DataFrame(all_rows)
+    return pd.DataFrame(all_rows)
+
+
 def extract_rrs_wavelengths(file):
     """Extract wavelengths — handles both full hyperspectral (AOP) and
     17-band IOP products automatically."""
@@ -631,7 +638,7 @@ keyword = 'AOP')
 set((i.summary()["short-name"] for i in results))
 
 # First load our complete list of Kd files.
-directory = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw'
+directory = PATH_TO_DATA_IN
 # Find all CSV files matching the pattern "*_Kd.csv"
 csv_files = glob.glob(os.path.join(directory, '**', '*_Kd.csv'), recursive=True)
 
@@ -679,27 +686,27 @@ kd_loc_all = kd_loc.copy()
 kd_loc = kd_loc[kd_loc['quality'] != 2]
 
 sat_rrs = process_satellite_rrs_fast(kd_loc, sat="PACE IOP", variable_wanted='Kd',
-    max_workers=4, download_dir='/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/pace_cache',
-    checkpoint_path='/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw/sat_kd_checkpoint.csv')
-sat_rrs.to_csv('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw/sat_kd_final.csv')
+    max_workers=4, download_dir=PATH_TO_DATA_OUT / 'pace_cache',
+    checkpoint_path=PATH_TO_DATA_OUT / 'sat_kd_checkpoint.csv')
+sat_rrs.to_csv(PATH_TO_DATA_OUT / 'sat_kd_final.csv')
 #
-# cache_dir = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/pace_cache'
-# ckpt = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw/sat_kd_checkpoint.csv'
+# cache_dir = PATH_TO_DATA_OUT / 'pace_cache'
+# ckpt = PATH_TO_DATA_OUT / 'sat_kd_checkpoint.csv'
 # shutil.rmtree(cache_dir)
 # os.makedirs(cache_dir)
 # print(f"Cache cleared.")
 # if os.path.exists(ckpt):
 #     os.remove(ckpt)
 #     print("Checkpoint cleared.")
-# cache_dir = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/pace_cache'
-# ckpt = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw/sat_kd_checkpoint.csv'
+# cache_dir = PATH_TO_DATA_OUT / 'pace_cache'
+# ckpt = PATH_TO_DATA_OUT / 'sat_kd_checkpoint.csv'
 #
 
 # Compute matchups
 matchups = match_data(sat_rrs, kd_loc, cv_max=0.8, max_time_diff=380, sza_max=70.0)
 matchups = matchups.dropna(axis=1, how='all')
 #save to csv
-matchups.to_csv('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw/matchups_PACE_Kd_L2.csv')
+matchups.to_csv(PATH_TO_DATA_OUT / 'matchups_PACE_Kd_L2.csv')
 
 #Drop the rows where quality is 2
 matchups_clean = matchups[matchups.quality != 2]
@@ -784,10 +791,10 @@ plt.ylabel('PACE OCI Kd($\lambda$) ', fontsize=18)
 plt.grid(True)
 plt.xscale('log')
 plt.yscale('log')
-plt.savefig('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs_NotRaw/Scatter_Kd_PACE_vs_Float.png')
+plt.savefig(PATH_TO_FIGS / 'Scatter_Kd_PACE_vs_Float.png')
 plt.show()
 
-matchups.to_csv('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/Outputs/matchup_loc_withPACE.csv')
+matchups.to_csv(PATH_TO_DATA_OUT / 'matchup_loc_withPACE.csv')
 
 #%% Make a nice map of the location of the matchups for slidesimport cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -834,10 +841,7 @@ ax.legend(handles=leg_handles, fontsize=20, loc='lower left',
           framealpha=0.9, edgecolor='#cccccc', frameon=True)
 
 plt.tight_layout()
-plt.savefig(
-    '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/'
-    'New_Outputs_NotRaw/Map_Location_Profiles.png',
-    dpi=250, bbox_inches='tight')
+plt.savefig(PATH_TO_FIGS / 'Map_Location_Profiles.png', dpi=250, bbox_inches='tight')
 plt.show()
 
 
@@ -934,9 +938,7 @@ ax.legend(fontsize=14, loc='upper right')
 ax.tick_params(axis='both', which='major', labelsize=12)
 ax.grid(True, alpha=0.25)
 plt.tight_layout()
-plt.savefig(
-    '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/'
-    'New_Outputs_NotRaw/Spectral_Bias_ribbon.png', dpi=200)
+plt.savefig(PATH_TO_FIGS/ 'Spectral_Bias_ribbon.png', dpi=200)
 plt.show()
 
 fig, ax = plt.subplots(figsize=(9, 8))
@@ -993,7 +995,5 @@ ax.tick_params(axis='both', labelsize=16)
 ax.legend(fontsize=14, loc='lower right')
 ax.grid(True, which='both', alpha=0.25)
 plt.tight_layout()
-plt.savefig(
-    '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/'
-    'New_Outputs_NotRaw/Scatter_Kd_polished.png', dpi=200)
+plt.savefig(PATH_TO_FIGS / 'Scatter_Kd_polished.png', dpi=200)
 plt.show()
