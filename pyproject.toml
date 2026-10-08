@@ -1,0 +1,23 @@
+[project]
+name = "vdiup-argo"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "cmocean",
+    "earthaccess",
+    "geopandas",
+    "matplotlib",
+    "netCDF4",
+    "numpy",
+    "pandas",
+    "pysolar",
+    "scipy",
+    "statsmodels",
+    "xarray",
+]
+
+[project.optional-dependencies]
+obsolete = [
+    "pvlib",
+    "seawater",
+]

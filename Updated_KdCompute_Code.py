@@ -32,8 +32,12 @@ import matplotlib.gridspec as gridspecw
 from matplotlib import gridspec
 
 #%% FUNCTIONS AND PATHS
-ROOT = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve'
+ROOT = '/Volumes/SD/VDIUP/Argo/CBD'
+# ROOT = '/Users/nils/Data/VDIUP/Argo/CBD'
 PROCESSED_PROFILES = os.path.join(ROOT, 'New_Outputs_NotRaw')
+
+if not os.path.exists(PROCESSED_PROFILES):
+    os.makedirs(PROCESSED_PROFILES)
 
 sys.path.append(ROOT)
 import seabass_maker as sb            # noqa: E402
@@ -45,12 +49,13 @@ warnings.filterwarnings('ignore', message='scipy.stats.shapiro: Input data has r
 # --- Config --------------------------------------------------------------
 TARGET_QC_WAVELENGTHS = [380, 443, 490, 550, 620]  # 5-wv QC
 PLOT_TARGET_WAVELENGTHS = [490, 555, 660]
-WMO_LIST_FILE = os.path.join(ROOT, 'WMOvsNSerie_allHyper.txt')
+WMO_LIST_FILE = os.path.join(ROOT, 'WMOvsNSerie.txt')
 WATERCOEFF_FILE = 'watercoeff.csv'
+BOOTSTRAP_RANDOM_SEED = 15
 
 # Set to True to reprocess every cycle from scratch instead of resuming from
 # saved {wmo}_Kd.csv. False = skip cycles already in the saved file.
-FORCE_REPROCESS = True
+FORCE_REPROCESS = False
 # Diagnostic plotting: show Ed-vs-depth panels for each cycle as it's processed.
 # Set to True for ad-hoc inspection, False (default) for production runs.
 PLOT_ED_PROFILES_DIAGNOSTIC = True
@@ -165,7 +170,7 @@ def quick_plot_ed_profile(Ed_profile, wavelengths, wmo, current_cycle,
     axes[0].invert_yaxis()
     fig.suptitle(f'Float {wmo} cycle {current_cycle} — {len(Ed_profile)} levels', fontsize=12)
     plt.tight_layout()
-    plt.show()
+    plt.show(block=False)
     plt.close(fig)
 def _decode(x, default=''):
     if isinstance(x, bytes):
@@ -322,11 +327,12 @@ def read_ed_from_aux(filename, fallback_wavelengths=None):
         'n_prof': n_prof,
         'data_mode': ed_mode,
     }
-def bootstrap_fit_klu_depth(df, speed, wavelengths, n_iterations):
+def bootstrap_fit_klu_depth(df, speed, wavelengths, n_iterations,
+                            random_seed=BOOTSTRAP_RANDOM_SEED):
     """Bootstrap Kd and Ed0 by perturbing depth and dropping random samples."""
     bootstrap_kd = []
     bootstrap_ed0 = []
-    rng = np.random.default_rng()
+    rng = np.random.default_rng(random_seed)
     perturbations = rng.normal(loc=0, scale=1, size=n_iterations)
 
     for i, perturbation in enumerate(perturbations):
@@ -368,7 +374,7 @@ def plot_ed_profiles(df, wmo, kd_df, wv_target, wv_og, ed0, flags_df, depth_col=
     kd_unc_columns = [c for c in kd_df.columns if c.startswith('kd') and 'unc' in c]
     ed0_columns = [c for c in ed0.columns if c.startswith('ed0') and 'unc' not in c]
     ed0_unc_columns = [c for c in ed0.columns if c.startswith('ed') and 'unc' in c]
-    quality_col = [c for c in kd_df.columns if c.startswith('quality')]
+    quality_col = next(c for c in kd_df.columns if c.startswith('quality'))
     ed_wavelengths = np.array(wv_og)
 
     closest_columns, closest_kd_columns, closest_0_columns, closest_indexs = [], [], [], []
@@ -553,8 +559,11 @@ def process_cycle(filename, base_filename, wmo, current_cycle, fallback_waveleng
 
     # --- Time stamps + depth correction (was: speed * 2s offset) ---
     n = ed_df.shape[0]
-    DT_arr = np.array([juld] * n) - mtime[:n]
-    DT = pd.to_datetime(DT_arr)
+    mt = mtime[:n]
+    if not np.issubdtype(mt.dtype, np.timedelta64):
+        # MTIME is float days relative to JULD; NaN becomes NaT
+        mt = pd.to_timedelta(mt, unit='D', errors='coerce').to_numpy()
+    DT = pd.to_datetime(np.array([juld] * n) - mt)
 
     speed = np.full(n, np.nan)
     for i in range(1, n):
@@ -623,7 +632,7 @@ def process_cycle(filename, base_filename, wmo, current_cycle, fallback_waveleng
     irr_conv = Ed_profile[wavelengths]
     photon_factor = np.array(wavelengths) * 1e-9 / (2.998e8 * 6.62606957e-34)
     par_band = (np.array(wavelengths) >= 350) & (np.array(wavelengths) <= 700)
-    Ed_profile['Epar'] = (np.trapz((np.array(irr_conv)[:, par_band] * photon_factor[par_band]))
+    Ed_profile['Epar'] = (np.trapezoid((np.array(irr_conv)[:, par_band] * photon_factor[par_band]))
                           / 6.02214129e23) * 1e6 / 1e4  # umol photons / cm2 / s
 
     # --- Organelli QC ---
@@ -1072,7 +1081,7 @@ if __name__ == '__main__':
             ax.tick_params(axis='both', which='major', labelsize=16)
             ax.invert_yaxis()
         plt.tight_layout()
-        plt.show()
+        plt.show(block=False)
 
         kd_columns = [c for c in Kd.columns if c.startswith('kd')
                       and 'unc' not in c and '_se' not in c and '_bincount' not in c]
@@ -1082,7 +1091,7 @@ if __name__ == '__main__':
         plt.ylabel('Kd', fontsize=14)
         plt.title('Kd spectra', fontsize=16)
         plt.grid(True)
-        plt.show()
+        plt.show(block=False)
 
         #%% Detect burst bining
         import xarray as xr

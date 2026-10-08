@@ -167,7 +167,7 @@ def fit_klu(df, fit_method='standard', wl_interp_method='pchip', smooth_method='
         for i, col in enumerate(lu_log.columns):
             zpd[i] = guess_zpd(z, lu_log[col])
 
-        zpd = lu_log.apply(lambda y: guess_zpd(z, y), axis='index').to_numpy()
+        zpd = lu_log.apply(lambda y: guess_zpd(z, y), axis='index').to_numpy().copy()
         # Iterate to find static zpd
         c = np.full((2, len(lu.columns)), np.nan)
         c_sd = np.empty_like(c)

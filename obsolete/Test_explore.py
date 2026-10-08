@@ -7,14 +7,13 @@ import pandas as pd
 import xarray as xr
 import seabass_maker as sb
 sys.path.append('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve')
-import Toolbox_RAMSES as tools
+from obsolete import Toolbox_RAMSES as tools
 import Function_KD
 import Organelli_QC_Shapiro
 import matplotlib.gridspec as gridspec
 import subprocess
 root = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve'
 Processed_profiles = ('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve/New_Outputs')
-import matplotlib.pyplot as plt
 
 # %% Download all the profiles from the floats from the GDAC
 df = pd.read_table(os.path.join(root, 'WMOvsNSerie.txt'))
@@ -766,7 +765,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
     flags_df = data_flags
 
     # Load the watercoeff file
-    watercoeff = pd.read_csv('watercoeff.csv')
+    watercoeff = pd.read_csv('../watercoeff.csv')
 
     # Iterate through the Kd DataFrame and update values
     for col in Kd.columns:

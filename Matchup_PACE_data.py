@@ -6,7 +6,6 @@ import matplotlib.style as style
 from matplotlib.ticker import FuncFormatter
 import numpy as np
 import pandas as pd
-import pvlib.solarposition as sunpos
 from scipy import stats, odr
 import re
 import xarray as xr
@@ -525,7 +524,7 @@ def match_data(df_sat, df_aoc,  cv_max=0.15,min_valid_pixels=10,    max_time_dif
       3. |time difference| <= max_time_diff minutes
       4. Solar zenith angle <= sza_max degrees  (daytime only)
     """
-    import pvlib.solarposition as sunpos
+    from pysolar.solar import get_altitude
 
     df_sat = df_sat.copy()
     df_aoc = df_aoc.copy()
@@ -548,8 +547,9 @@ def match_data(df_sat, df_aoc,  cv_max=0.15,min_valid_pixels=10,    max_time_dif
     # ── In-situ-side filter: solar zenith ──────────────────────────────────
     def compute_sza(row):
         try:
-            sp = sunpos.get_solarposition(row['date'], row['lat'], row['lon'])
-            return float(sp['zenith'].iloc[0])
+            timestamp_utc = row['date'].tz_localize('UTC').to_pydatetime()
+            solar_elevation = get_altitude(row['lat'], row['lon'], timestamp_utc)
+            return 90.0 - solar_elevation
         except Exception:
             return 90.0
 
