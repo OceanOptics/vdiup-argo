@@ -10,7 +10,8 @@ import requests
 from tqdm import tqdm
 from requests.adapters import HTTPAdapter
 
-ROOT = Path('/Volumes/SD/VDIUP/Argo/CBD')
+from config import PATH_TO_SOURCE, FLOAT_LIST_FILE
+
 BASE = 'https://data-argo.ifremer.fr'
 WORKERS = 16
 # Progress bars need a real terminal. In PyCharm, enable
@@ -86,14 +87,14 @@ def log(message):
         print(message, flush=True)
 
 
-floats = pd.read_csv(ROOT / 'HyperFloats.csv')
+floats = pd.read_csv(FLOAT_LIST_FILE)
 floats['DAC'] = floats['DAC'].fillna('coriolis').str.strip().str.lower().replace('', 'coriolis')
 floats = floats.drop_duplicates('WMO')
 
 pairs = list(zip(floats['WMO'], floats['DAC']))
 progress = tqdm(pairs, desc='Floats', unit='float', dynamic_ncols=True) if USE_TQDM else pairs
 for number, dac in progress:
-    dir_path = ROOT / str(number)
+    dir_path = PATH_TO_SOURCE / str(number)
     general_path = dir_path / 'profiles_general'
     general_path.mkdir(parents=True, exist_ok=True)
 

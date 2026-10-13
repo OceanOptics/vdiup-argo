@@ -1,41 +1,7 @@
-import os
-import re
-import warnings
-from io import StringIO
-
 import pandas as pd
-import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from shared.template import plotly_template
-
-
-def read_sb(filename):
-    with open(filename) as f:
-        d = f.read()
-    rows = re.split('\n/|=', d)
-    header = {rows[i]: rows[i+1] for i in range(1, len(rows)-1, 2)}
-    fields = header['fields'].split(',')
-    cols = pd.MultiIndex.from_tuples([(f'kd{f[7:]}', float(f[2:7])) if f.startswith('kd') else (f, '') for f in fields])
-    df = pd.read_csv(StringIO(rows[-1].strip('end_header\n')), names=cols, na_values=-9999).copy()
-    # Format date & time
-    df.insert(1, ('datetime', ''), pd.to_datetime(df['date'].astype(str) + df['time'], format='%Y%m%d%H:%M:%S'))
-    df.drop(columns=[('date', ''), ('time', '')], inplace=True)
-    # Check fields comply
-    for f in ['profile', 'date', 'time', 'lon', 'lat', 'quality']:
-        if f not in fields:
-            raise KeyError(f"{os.path.basename(f)}: missing field {f} in file.")
-    for e in ['_unc', '_se', '_bincount']:
-        try:
-            if not (df['kd'].columns == df[f'kd{e}'].columns).all():
-                raise KeyError(f"{os.path.basename(f)}: missing wavelength kd{e} in file.")
-        except ValueError as ex:
-            missing_cols = []
-            for c in df['kd'].columns:
-                if c not in df[f'kd{e}'].columns:
-                    missing_cols.append(c)
-            raise ValueError(f"{os.path.basename(filename)}: {ex} kd and kd{e} columns. Missing wavelength(s): {missing_cols}")
-    return df, header
+from src.io.seabass import read_sb
 
 
 QUALITY_STR = {0: 'good', 1: 'questionable', 2: 'bad'}

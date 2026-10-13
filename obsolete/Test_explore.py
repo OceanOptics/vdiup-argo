@@ -765,7 +765,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
     flags_df = data_flags
 
     # Load the watercoeff file
-    watercoeff = pd.read_csv('../watercoeff.csv')
+    watercoeff = pd.read_csv('../data/watercoeff.csv')
 
     # Iterate through the Kd DataFrame and update values
     for col in Kd.columns:

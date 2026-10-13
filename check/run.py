@@ -5,6 +5,7 @@ import shutil
 
 from tqdm import tqdm
 
+from config import PATH_TO_SEABASS_SUBMISSION, PATH_TO_FIGURES
 from check.dcheck import make_plot
 from check.fcheck import run_fcheck
 
@@ -16,8 +17,8 @@ logger.setLevel(logging.DEBUG)
 if __name__ == '__main__':
     target_revision = 'R2'
     # dirname = '/Users/nils/Documents/Lab/Projects/VDIUP/_Floats/submitted/20260622'
-    dirname = '/Volumes/SD/VDIUP/Argo/CBD/New_Outputs_NotRaw'
-    fig_dir = dirname + '_figs'
+    dirname = PATH_TO_SEABASS_SUBMISSION
+    fig_dir = PATH_TO_FIGURES / 'seabass.check'
     if not os.path.exists(fig_dir):
         os.makedirs(fig_dir)
         if not os.path.exists(os.path.join(fig_dir, 'html')):

@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 import sys
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -31,26 +32,21 @@ import matplotlib.colors as mcolors
 import matplotlib.gridspec as gridspecw
 from matplotlib import gridspec
 
-#%% FUNCTIONS AND PATHS
-ROOT = '/Volumes/SD/VDIUP/Argo/CBD'
-# ROOT = '/Users/nils/Data/VDIUP/Argo/CBD'
-PROCESSED_PROFILES = os.path.join(ROOT, 'New_Outputs_NotRaw')
-
-if not os.path.exists(PROCESSED_PROFILES):
-    os.makedirs(PROCESSED_PROFILES)
-
-sys.path.append(ROOT)
 import seabass_maker as sb            # noqa: E402
 import Function_KD                    # noqa: E402
 import Organelli_QC_Shapiro           # noqa: E402
-import warnings
+from config import PATH_TO_SOURCE, PATH_TO_PROCESSED, FLOAT_LIST_FILE
+
+#%% FUNCTIONS AND PATHS
+if not os.path.exists(PATH_TO_PROCESSED):
+    os.makedirs(PATH_TO_PROCESSED)
+
 warnings.filterwarnings('ignore', message='scipy.stats.shapiro: Input data has range zero')
 
 # --- Config --------------------------------------------------------------
 TARGET_QC_WAVELENGTHS = [380, 443, 490, 550, 620]  # 5-wv QC
 PLOT_TARGET_WAVELENGTHS = [490, 555, 660]
-WMO_LIST_FILE = os.path.join(ROOT, 'WMOvsNSerie.txt')
-WATERCOEFF_FILE = 'watercoeff.csv'
+WATERCOEFF_FILE = 'data/watercoeff.csv'
 BOOTSTRAP_RANDOM_SEED = 15
 
 # Set to True to reprocess every cycle from scratch instead of resuming from
@@ -415,7 +411,7 @@ def plot_ed_profiles(df, wmo, kd_df, wv_target, wv_og, ed0, flags_df, depth_col=
             print(f"Could not find profile number for cycle {cycle}")
             continue
 
-        figure_path = os.path.join(PROCESSED_PROFILES, wmo, f"{wmo}_{profile_number}_fig.png")
+        figure_path = os.path.join(PATH_TO_PROCESSED, wmo, f"{wmo}_{profile_number}_fig.png")
         if os.path.exists(figure_path):
             print(f"Figure already exists at {figure_path}")
             continue
@@ -788,46 +784,46 @@ def fit_kd_for_cycle(cycle_data, current_cycle):
     return kd_rec, ed0_rec
 
 #%% DOWNLOAD FROM GDAC
-df_wmo = pd.read_table(WMO_LIST_FILE)
+df_wmo = pd.read_table(FLOAT_LIST_FILE)
 list_wmo = df_wmo['WMO'].unique()
 
-for number in list_wmo:
-    dir_path = os.path.join(ROOT, str(number))
-    if not os.path.exists(dir_path):
-        os.makedirs(dir_path)
-        os.makedirs(os.path.join(dir_path, 'profiles_general'))
-        print(f"Created profile directory: {dir_path}")
-
-    # aux: contains both raw counts and calibrated DOWN_IRRADIANCE_SPECTRUM
-    cmd_aux = (f"wget -r -np --wait 1 -nH -N --cut-dirs=3 -P {dir_path} "
-               f"--reject 'index.html*' "
-               f"https://data-argo.ifremer.fr/aux/coriolis/{number}/")
-    # standard B-files: needed for TEMP/PSAL interpolated to Ed depths
-    cmd_general = (f"wget -r -np --wait 1 -nH -N --cut-dirs=4 "
-                   f"-P {os.path.join(dir_path, 'profiles_general')} "
-                   f"--reject 'index.html*' --accept 'R*.nc' "
-                   f"https://data-argo.ifremer.fr/dac/coriolis/{number}/profiles/")
-    subprocess.run(cmd_general, shell=True)
-    subprocess.run(cmd_aux, shell=True)
-
-    if number ==3902759:
-        cmd_aux = (f"wget -r -np --wait 1 -nH -N --cut-dirs=3 -P {dir_path} "
-                   f"--reject 'index.html*' "
-                   f"https://data-argo.ifremer.fr/aux/aoml/{number}/")
-        # standard B-files: needed for TEMP/PSAL interpolated to Ed depths
-        cmd_general = (f"wget -r -np --wait 1 -nH -N --cut-dirs=4 "
-                       f"-P {os.path.join(dir_path, 'profiles_general')} "
-                       f"--reject 'index.html*' --accept 'R*.nc' "
-                       f"https://data-argo.ifremer.fr/dac/aoml/{number}/profiles/")
-        subprocess.run(cmd_general, shell=True)
-        subprocess.run(cmd_aux, shell=True)
+# for number in list_wmo:
+#     dir_path = os.path.join(PATH_TO_SOURCE, str(number))
+#     if not os.path.exists(dir_path):
+#         os.makedirs(dir_path)
+#         os.makedirs(os.path.join(dir_path, 'profiles_general'))
+#         print(f"Created profile directory: {dir_path}")
+#
+#     # aux: contains both raw counts and calibrated DOWN_IRRADIANCE_SPECTRUM
+#     cmd_aux = (f"wget -r -np --wait 1 -nH -N --cut-dirs=3 -P {dir_path} "
+#                f"--reject 'index.html*' "
+#                f"https://data-argo.ifremer.fr/aux/coriolis/{number}/")
+#     # standard B-files: needed for TEMP/PSAL interpolated to Ed depths
+#     cmd_general = (f"wget -r -np --wait 1 -nH -N --cut-dirs=4 "
+#                    f"-P {os.path.join(dir_path, 'profiles_general')} "
+#                    f"--reject 'index.html*' --accept 'R*.nc' "
+#                    f"https://data-argo.ifremer.fr/dac/coriolis/{number}/profiles/")
+#     subprocess.run(cmd_general, shell=True)
+#     subprocess.run(cmd_aux, shell=True)
+#
+#     if number ==3902759:
+#         cmd_aux = (f"wget -r -np --wait 1 -nH -N --cut-dirs=3 -P {dir_path} "
+#                    f"--reject 'index.html*' "
+#                    f"https://data-argo.ifremer.fr/aux/aoml/{number}/")
+#         # standard B-files: needed for TEMP/PSAL interpolated to Ed depths
+#         cmd_general = (f"wget -r -np --wait 1 -nH -N --cut-dirs=4 "
+#                        f"-P {os.path.join(dir_path, 'profiles_general')} "
+#                        f"--reject 'index.html*' --accept 'R*.nc' "
+#                        f"https://data-argo.ifremer.fr/dac/aoml/{number}/profiles/")
+#         subprocess.run(cmd_general, shell=True)
+#         subprocess.run(cmd_aux, shell=True)
 
 #%% PROCESSING
 if __name__ == '__main__':
 
   # Grab the Wmos from existing directories (in case some were added manually or by a previous run)
-    wmos = sorted([item for item in os.listdir(ROOT)
-                   if os.path.isdir(os.path.join(ROOT, item))
+    wmos = sorted([item for item in os.listdir(PATH_TO_SOURCE)
+                   if os.path.isdir(os.path.join(PATH_TO_SOURCE, item))
                    and re.match(r"^\d+$", item)])
 
     # Step 3 -- Process each float
@@ -849,11 +845,11 @@ if __name__ == '__main__':
     for wmo in wmos:
         print(f"\n=== Float {wmo} ===")
 
-        if not os.path.exists(os.path.join(ROOT, wmo, 'profiles')):
+        if not os.path.exists(os.path.join(PATH_TO_SOURCE, wmo, 'profiles')):
             print(f'No profiles for float {wmo}')
             continue
 
-        out_dir = os.path.join(PROCESSED_PROFILES, wmo)
+        out_dir = os.path.join(PATH_TO_PROCESSED, wmo)
         os.makedirs(out_dir, exist_ok=True)
 
         kd_records, ed0_records = [], []
@@ -888,7 +884,7 @@ if __name__ == '__main__':
             'measurement_depth': 'NA',
         }
 
-        aux_files = sorted(glob.glob(os.path.join(ROOT, wmo, 'profiles', '*_aux.nc')))
+        aux_files = sorted(glob.glob(os.path.join(PATH_TO_SOURCE, wmo, 'profiles', '*_aux.nc')))
 
         # Per-float wavelength cache. Wavelengths are fixed per instrument,
         # so once we read them from any cycle (or from a previously-saved Kd
@@ -901,7 +897,7 @@ if __name__ == '__main__':
                 float_wv_cache = cached
 
         if float_wv_cache is None:
-            float_wv_cache = load_wavelengths_from_meta(wmo, ROOT)
+            float_wv_cache = load_wavelengths_from_meta(wmo, PATH_TO_SOURCE)
 
         for filename in aux_files:
             base = os.path.basename(filename)
@@ -923,7 +919,7 @@ if __name__ == '__main__':
                 continue
 
             base_filename = os.path.join(
-                ROOT, wmo, 'profiles_general', re.split(r'_aux\.nc', base)[0] + '.nc')
+                PATH_TO_SOURCE, wmo, 'profiles_general', re.split(r'_aux\.nc', base)[0] + '.nc')
 
 
             cycle_data = process_cycle(filename, base_filename, wmo, current_cycle,
@@ -1059,9 +1055,9 @@ if __name__ == '__main__':
     # =====================================================================
     last_wmo = wmos[-1] if wmos else None
     if last_wmo is not None:
-        Kd = pd.read_csv(os.path.join(PROCESSED_PROFILES, last_wmo, f'{last_wmo}_Kd.csv'))
-        Ed0 = pd.read_csv(os.path.join(PROCESSED_PROFILES, last_wmo, f'{last_wmo}_Ed0.csv'))
-        Ed_all = pd.read_csv(os.path.join(PROCESSED_PROFILES, last_wmo, f'{last_wmo}_Ed.csv'))
+        Kd = pd.read_csv(os.path.join(PATH_TO_PROCESSED, last_wmo, f'{last_wmo}_Kd.csv'))
+        Ed0 = pd.read_csv(os.path.join(PATH_TO_PROCESSED, last_wmo, f'{last_wmo}_Ed0.csv'))
+        Ed_all = pd.read_csv(os.path.join(PATH_TO_PROCESSED, last_wmo, f'{last_wmo}_Ed.csv'))
         wavelengths = extract_wavelengths_from_columns(Ed0, pattern='ed0')
 
         filtered_df = Ed_all[Ed_all['depth'] <= 100]
@@ -1125,8 +1121,6 @@ if __name__ == '__main__':
         BURST_BIN_DEPTH_RESOLUTION = 0.1
         BURST_SHALLOW_DEPTH_M = 15.0
         BURST_MIN_PER_BIN = 3
-
-        ROOT = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve'
 
         def _decode(x, default=''):
             if isinstance(x, bytes): return x.decode().strip()
@@ -1201,5 +1195,5 @@ if __name__ == '__main__':
         print("\n=== Burst-binning audit ===")
         print(audit.to_string(index=False))
 
-        audit.to_csv(os.path.join(ROOT, 'New_Outputs_NotRaw', 'burst_audit.csv'), index=False)
-        print(f"\nSaved to {os.path.join(ROOT, 'New_Outputs_NotRaw', 'burst_audit.csv')}")
+        audit.to_csv(os.path.join(PATH_TO_PROCESSED, 'burst_audit.csv'), index=False)
+        print(f"\nSaved to {os.path.join(PATH_TO_PROCESSED, 'burst_audit.csv')}")
