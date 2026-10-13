@@ -3,17 +3,13 @@ import earthaccess
 import matplotlib.cm as mcm
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
-import matplotlib.style as style
-from matplotlib.ticker import FuncFormatter
 import numpy as np
 import pandas as pd
-from scipy import stats, odr
 import re
 import xarray as xr
 import glob
 import os
 import concurrent.futures
-import shutil
 from collections import defaultdict
 from pathlib import Path
 
@@ -806,7 +802,6 @@ matchups.to_csv(PATH_TO_DATA_OUT / 'matchup_loc_withPACE.csv')
 import cartopy.feature as cfeature
 import cartopy.crs as ccrs
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 
 proj = ccrs.Mollweide()
 
@@ -852,7 +847,6 @@ plt.show(block=False)
 
 
 #%% import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 import numpy as np
 import re
 from scipy import stats
