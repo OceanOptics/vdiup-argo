@@ -16,3 +16,6 @@ FLOAT_LIST_FILE = ROOT / 'HyperFloats.csv'
 
 DOWNLOAD_DATE = '20261009'
 
+# Profile quality flag (as written by Updated_KdCompute_Code.py)
+QUALITY = {0: 'good', 1: 'questionable', 2: 'bad'}
+

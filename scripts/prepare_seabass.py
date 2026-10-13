@@ -17,9 +17,8 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 from src.data_io.seabass import read_profiles
-from config import PATH_TO_PROCESSED, PATH_TO_SEABASS, PATH_TO_SOURCE, SEABASS_REVISION
+from config import PATH_TO_PROCESSED, PATH_TO_SEABASS, PATH_TO_SOURCE, QUALITY, SEABASS_REVISION
 
-QUALITY = {0: 'good', 1: 'questionable', 2: 'bad'}
 STALE_DAYS = 60          # float flagged if its last processed profile is older
 MAX_CYCLE_GAP = 1        # report missing cycle numbers (gap > this)
 

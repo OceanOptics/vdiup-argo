@@ -2,9 +2,9 @@ import pandas as pd
 from plotly.subplots import make_subplots
 
 import src.data_io.seabass as seabass
+from config import QUALITY
 
 
-QUALITY_STR = {0: 'good', 1: 'questionable', 2: 'bad'}
 QUALITY_COL = {0: "#2CA02C", 1: "#FF7F0E", 2: "#D62728"}
 
 def make_plot(filenames):
@@ -38,13 +38,13 @@ def make_plot(filenames):
             #                 line=dict(width=0.5, color=QUALITY_COL[q]), showlegend=False, fill='tonexty', name=f"-unc")
             fig.add_scatter(x=wl, y=r.kd, mode='lines+markers', opacity=1, legendgroup=f"{header['platform_id']}.{p}",
                             marker_color=QUALITY_COL[q], showlegend=True,
-                            name=f"{header['platform_id']} {p:03d} {QUALITY_STR[q]}", row=1, col=1)
+                            name=f"{header['platform_id']} {p:03d} {QUALITY[q]}", row=1, col=1)
             fig.add_scatter(x=wl, y=r.kd_se, mode='lines+markers', opacity=1, legendgroup=f"{header['platform_id']}.{p}",
                             marker_color=QUALITY_COL[q], showlegend=False,
-                            name=f"{header['platform_id']} {p:03d} {QUALITY_STR[q]}", row=2, col=1)
+                            name=f"{header['platform_id']} {p:03d} {QUALITY[q]}", row=2, col=1)
             fig.add_scatter(x=wl, y=r.kd_unc, mode='lines+markers', opacity=1, legendgroup=f"{header['platform_id']}.{p}",
                             marker_color=QUALITY_COL[q], showlegend=False,
-                            name=f"{header['platform_id']} {p:03d} {QUALITY_STR[q]}", row=3, col=1)
+                            name=f"{header['platform_id']} {p:03d} {QUALITY[q]}", row=3, col=1)
     fig.update_xaxes(title='Wavelength (nm)', row=3)
     fig.update_xaxes(showticklabels=True, showgrid=True)
     fig.update_yaxes(title=f'Kd (1/m)', showgrid=True, row=1)
