@@ -5,11 +5,11 @@ import sys
 import numpy as np
 import pandas as pd
 import xarray as xr
-import seabass_maker as sb
+import src.data_io.seabass as sb
 sys.path.append('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve')
 from obsolete import Toolbox_RAMSES as tools
-import Function_KD
-import Organelli_QC_Shapiro
+from src.process import qc as Organelli_QC_Shapiro
+from src.process import kd_function as Function_KD
 import matplotlib.gridspec as gridspec
 import subprocess
 root = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve'
@@ -258,7 +258,7 @@ def bootstrap_fit_klu_depth(df, Speed, n_iterations=10, fit_method='iterative'):
         # Run the fit_klu function
         try:
             result,no_data_above_zpd = Function_KD.fit_klu(df_resampled, fit_method='iterative', wl_interp_method='None',
-                                         smooth_method='None', only_continuous_obs=False, verbose=False)
+                                                           smooth_method='None', only_continuous_obs=False, verbose=False)
             bootstrap_results.append(result['Kl'].values)
             bootstrap_Ed0.append(result['Luf'].values)
         except Exception as e:
@@ -568,8 +568,8 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
         # Organelli QC
         results = Organelli_QC_Shapiro.organelli16_qc(Ed_profile, lat=Ed_profile.lat[0],
-                                                          lon=Ed_profile.lon[0],qc_wls=wavelengths , step2_r2=0.995, step3_r2=0.997,
-                                                          step3_r3=0.999)
+                                                      lon=Ed_profile.lon[0], qc_wls=wavelengths, step2_r2=0.995, step3_r2=0.997,
+                                                      step3_r3=0.999)
 
         qc_5wv = find_closest_wavelengths(target_qc_wavelengths, wavelengths)
         results_5wv = Organelli_QC_Shapiro.organelli16_qc(Ed_profile, lat=Ed_profile.lat[0],
@@ -676,7 +676,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
 
     # Calculate the median and standard deviation across the bootstrap samples
         median_luf_kd, std_luf_kd, median_Ed0, std_Ed0 = bootstrap_fit_klu_depth(new_Ed, Speed, n_iterations=100, fit_method='iterative')
-        result, no_data_above_zpd = Function_KD.fit_klu(new_Ed,  fit_method='iterative', wl_interp_method='None', smooth_method='None',  only_continuous_obs=False)
+        result, no_data_above_zpd = Function_KD.fit_klu(new_Ed, fit_method='iterative', wl_interp_method='None', smooth_method='None', only_continuous_obs=False)
 
         # Add a questionable flag if the zpd is above any data.
         if no_data_above_zpd:
@@ -804,7 +804,7 @@ for wmo in cals[(cals['rad'] == 'Ed')]['wmo']:
             # Iterate over each group and create a SeaBASS file
             for year_month, group in Kd.groupby('year_month'):
                 group = group.drop(columns=['year_month'])
-                sb.format_to_seabass(group, metadata, f'PVST_VDIUP-Argo-Kd_{wmo}_{year_month}_R1', path, comments,
+                sb.write(group, metadata, f'PVST_VDIUP-Argo-Kd_{wmo}_{year_month}_R1', path, comments,
                                      missing_value_placeholder='-9999', delimiter='comma')
             Ed0.to_csv(os.path.join(Processed_profiles, wmo, wmo + '_Ed0.csv'), index=False)
             print(f'Ed0 file for float {wmo} was created')

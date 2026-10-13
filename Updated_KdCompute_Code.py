@@ -19,8 +19,6 @@ is listed in STATION_PARAMETERS):
 import glob
 import os
 import re
-import subprocess
-import sys
 import warnings
 
 import numpy as np
@@ -29,12 +27,11 @@ import xarray as xr
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
-import matplotlib.gridspec as gridspecw
 from matplotlib import gridspec
 
-import seabass_maker as sb            # noqa: E402
-import Function_KD                    # noqa: E402
-import Organelli_QC_Shapiro           # noqa: E402
+import src.data_io.seabass as sb            # noqa: E402
+from src.process.qc import organelli16_qc
+from src.process.kd_function import fit_klu
 from config import PATH_TO_SOURCE, PATH_TO_PROCESSED, FLOAT_LIST_FILE
 
 #%% FUNCTIONS AND PATHS
@@ -180,7 +177,6 @@ def load_wavelengths_from_meta(wmo, root):
     together with LAUNCH_CONFIG_PARAMETER pixel/binning parameters.
     Returns a 1-D float ndarray of wavelengths (rounded to nearest nm), or None.
     """
-    import re
     meta_path = os.path.join(root, wmo, f'{wmo}_meta_aux.nc')
     if not os.path.exists(meta_path):
         return None
@@ -360,7 +356,7 @@ def bootstrap_fit_klu_depth(df, speed, wavelengths, n_iterations,
                 df_resampled.loc[drop, col] = np.nan
 
         try:
-            result, _ = Function_KD.fit_klu(
+            result, _ = fit_klu(
                 df_resampled, fit_method='iterative', wl_interp_method='None',
                 smooth_method='None', only_continuous_obs=False, verbose=False)
             bootstrap_kd.append(result['Kl'].values)
@@ -652,7 +648,7 @@ def process_cycle(filename, base_filename, wmo, current_cycle, fallback_waveleng
                           / 6.02214129e23) * 1e6 / 1e4  # umol photons / cm2 / s
 
     # --- Organelli QC ---
-    results = Organelli_QC_Shapiro.organelli16_qc(
+    results = organelli16_qc(
         Ed_profile, lat=lat, lon=lon, qc_wls=list(wavelengths),
         step2_r2=0.995, step3_r2=0.997, step3_r3=0.999)
 
@@ -748,7 +744,7 @@ def fit_kd_for_cycle(cycle_data, current_cycle):
     # Bootstrap + single-fit
     median_kd, std_kd, median_ed0, std_ed0 = bootstrap_fit_klu_depth(
         new_Ed, speed, wavelengths, n_iterations=100)
-    result, no_data_above_zpd = Function_KD.fit_klu(
+    result, no_data_above_zpd = fit_klu(
         new_Ed, fit_method='iterative', wl_interp_method='None',
         smooth_method='None', only_continuous_obs=False)
     if no_data_above_zpd:
@@ -1038,9 +1034,10 @@ if __name__ == '__main__':
             if ym not in months_to_write:
                 continue
             group = group.drop(columns=['year_month'])
-            sb.format_to_seabass(
+            sb.write(
                 group, metadata, f'PVST_VDIUP-Argo-Kd_{wmo}_{ym}_R2', out_dir,
-                comments, missing_value_placeholder='-9999', delimiter='comma')
+                comments, missing_value_placeholder='-9999', delimiter='comma'
+            )
         Kd = Kd.drop(columns=['year_month'])
 
         # Wavelength axis for plotting (from Ed0 column names)
@@ -1110,13 +1107,6 @@ if __name__ == '__main__':
         plt.show(block=False)
 
         #%% Detect burst bining
-        import xarray as xr
-        import numpy as np
-        import pandas as pd
-        import glob
-        import os
-        import re
-
         # Match the values in your processing config
         BURST_BIN_DEPTH_RESOLUTION = 0.1
         BURST_SHALLOW_DEPTH_M = 15.0

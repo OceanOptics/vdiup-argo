@@ -1,7 +1,7 @@
 import pandas as pd
 from plotly.subplots import make_subplots
 
-from src.io.seabass import read_sb
+import src.data_io.seabass as seabass
 
 
 QUALITY_STR = {0: 'good', 1: 'questionable', 2: 'bad'}
@@ -13,7 +13,7 @@ def make_plot(filenames):
     # fig = go.Figure()
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05)
     for f in filenames:
-        df, header = read_sb(f)
+        df, header = seabass.read(f)
         platform_ids.append(header['platform_id'])
         wl = df.kd.columns.to_numpy(float)
         # Hide High Red Uncertainty

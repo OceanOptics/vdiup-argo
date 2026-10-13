@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
-from src.io.seabass import read_sb_profiles
+from src.data_io.seabass import read_profiles
 from config import PATH_TO_PROCESSED, PATH_TO_SEABASS, PATH_TO_SOURCE, SEABASS_REVISION
 
 QUALITY = {0: 'good', 1: 'questionable', 2: 'bad'}
@@ -28,7 +28,7 @@ def load_files(files):
     frames, problems = [], []
     for f in files:
         try:
-            header, df = read_sb_profiles(f)
+            header, df = read_profiles(f)
         except Exception as e:  # noqa: BLE001
             problems.append(f'{f}: cannot be parsed ({e})')
             continue
@@ -219,7 +219,7 @@ def main(revision, processed, root, dry_run, source=str(PATH_TO_SOURCE)):
     with open(anomalies_file, 'w') as f:
         f.write('\n'.join(sorted(anomalies)) + '\n')
     print(f'Anomalies written to {anomalies_file}')
-    print('\nReminder: run check/run.py (fcheck) on the working folder before uploading.')
+    print('\nReminder: run scripts/check_seabass.py (fcheck) before uploading.')
 
 
 if __name__ == '__main__':

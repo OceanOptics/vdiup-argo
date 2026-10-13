@@ -5,14 +5,14 @@ import os
 
 import pandas as pd
 
-from src.io.seabass import read_sb
+import src.data_io.seabass as seabass
 from config import PATH_TO_PROCESSED, PATH_TO_MATCHUPS
 
 DEFAULT_OUT = PATH_TO_MATCHUPS / 'All_Kd_profiles.csv'
 
 
 def load_file(filename):
-    df, header = read_sb(filename)
+    df, header = seabass.read(filename)
     wmo = header['platform_id']
     out = {
         'date': df[('datetime', '')],
