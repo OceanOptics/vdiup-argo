@@ -1720,6 +1720,7 @@ dependencies = [
     { name = "pysolar" },
     { name = "scipy" },
     { name = "statsmodels" },
+    { name = "tqdm" },
     { name = "xarray" },
 ]
 
@@ -1746,6 +1747,7 @@ requires-dist = [
     { name = "scipy" },
     { name = "seawater", marker = "extra == 'obsolete'" },
     { name = "statsmodels" },
+    { name = "tqdm" },
     { name = "xarray" },
 ]
 provides-extras = ["obsolete"]

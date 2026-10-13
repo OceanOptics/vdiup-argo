@@ -16,6 +16,7 @@ dependencies = [
     "pysolar",
     "scipy",
     "statsmodels",
+    "tqdm",
     "xarray",
 ]
 

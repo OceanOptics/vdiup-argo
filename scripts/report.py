@@ -37,7 +37,7 @@ a = processed.read('Kd').copy()
 m = pd.read_csv(PATH_TO_MATCHUPS / 'PACE_OCI_KD.matchups.csv', parse_dates=['datetime', 'oci_datetime'])
 m.rename(columns={'WMO': 'wmo'}, inplace=True)
 m.time_diff = pd.to_timedelta(m.time_diff)
-if 'profile' not in m.columns:
+if 'profile' in m.columns:
     m['wmo'] = m['wmo'].astype(str) + '_' + m['profile'].astype(str).str.zfill(3)
 mu = m.loc[m['time_diff'].abs().groupby(m['wmo']).idxmin()]  # Unique matchups with minimum time difference per profile
 
