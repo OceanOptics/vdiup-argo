@@ -12,7 +12,7 @@ dependencies = [
     "netCDF4",
     "numpy",
     "pandas",
-    "plotly",
+    "plotly~=6.9",  # PyCharm 2026.2.3 is not yet compatible with plotly >=7.0.0, so we pin to 6.9 for now
     "pysolar",
     "scipy",
     "statsmodels",
