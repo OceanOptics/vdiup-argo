@@ -52,10 +52,53 @@ CV_BAND_NM = (412, 555)  # wavelength range used for the coefficient of variatio
 
 SEARCH_CACHE_NAME = "_search_cache.pkl"
 PROCESS_CHECKPOINT_NAME = "_process_checkpoint.csv"
+GRANULE_STATS_NAME = "_granule_stats.json"
 
 
 class GranuleOpenError(Exception):
     """The local granule file could not be opened (likely corrupt)."""
+
+
+def _empty_stats():
+    """Fresh accumulator for granule-processing statistics."""
+    return {
+        'granules': 0,
+        'targets': 0,
+        'distance_too_far': 0,
+        'no_valid_pixels': 0,
+        'total_pixels': 0,
+        'flagged_pixels': 0,
+        'nan_pixels': 0,
+        'valid_pixels': 0,
+        'matched': 0,
+        'flags': defaultdict(int),
+    }
+
+
+def _merge_stats(acc, s):
+    """Merge a per-granule stats dict into the accumulator."""
+    for k, v in s.items():
+        if k == 'flags':
+            for fk, fv in v.items():
+                acc['flags'][fk] += fv
+        else:
+            acc[k] += v
+
+
+def print_granule_stats(stats):
+    """Display granule-processing statistics in a funnel style."""
+    print(f"  Granules processed:        {stats['granules']}")
+    print(f"  Targets in granules:       {stats['targets']}")
+    n1 = stats['targets'] - stats['distance_too_far']
+    print(f"  Distance > {MAX_PIXEL_DISTANCE_KM} km: {stats['distance_too_far']:4d}    {stats['targets']} → {n1}")
+    n2 = n1 - stats['no_valid_pixels']
+    print(f"  No valid pixels:   {stats['no_valid_pixels']:4d}    {n1} →  {n2}")
+    print(f"    - pixels excluded by NaN:   {stats['nan_pixels']} ({stats['nan_pixels'] / stats['total_pixels'] * 100:.1f}%)")
+    print(f"    - pixels excluded by flags: {stats['flagged_pixels']} ({stats['flagged_pixels'] / stats['total_pixels'] * 100:.1f}%)")
+    if stats['flags']:
+        for flag, count in sorted(stats['flags'].items(), key=lambda kv: kv[1], reverse=True):
+            print(f"        {flag:<12} {count}")
+    print(f"  Matchups produced:         {stats['matched']}")
 
 
 def _atomic_write(path, writer, mode="w"):
@@ -178,7 +221,8 @@ def clear_cache(download_dir):
     files = list(download_dir.glob("*.nc")) + [
         download_dir / SEARCH_CACHE_NAME,
         download_dir / PROCESS_CHECKPOINT_NAME,
-        download_dir / f"{PROCESS_CHECKPOINT_NAME}.meta.json"
+        download_dir / f"{PROCESS_CHECKPOINT_NAME}.meta.json",
+        download_dir / GRANULE_STATS_NAME,
     ]
     n = 0
     for f in files:
@@ -205,6 +249,10 @@ def extract_granule_stats(local_path, granule, target_specs,
     exclude_mask = sum(L2_FLAGS[f] for f in EXCLUSION_FLAGS)
     prefix = f'oci_{variable_wanted.lower()}'
 
+    stats = _empty_stats()
+    stats['granules'] = 1
+    stats['targets'] = len(target_specs)
+
     try:
         # Now that the file is local, just read full arrays — it's all memory.
         sat_lat = ds_nav['latitude'].values
@@ -227,6 +275,7 @@ def extract_granule_stats(local_path, granule, target_specs,
             _, _, dist_m = geod.inv(lon, lat, sat_lon[cl, cp], sat_lat[cl, cp])
             distance_km = dist_m / 1000.0
             if distance_km > MAX_PIXEL_DISTANCE_KM:
+                stats['distance_too_far'] += 1
                 continue  # target lies outside the swath: no statistics, no row
 
             ls = max(cl - HALF_WINDOW, 0); le = min(cl + HALF_WINDOW + 1, sat_lat.shape[0])
@@ -239,11 +288,23 @@ def extract_granule_stats(local_path, granule, target_specs,
             if v.ndim == 2:
                 v = v[:, :, np.newaxis]
             # Keep only unflagged pixels with a finite value in every band.
-            valid = (np.bitwise_and(f, exclude_mask) == 0) & np.isfinite(v).all(axis=2)
+            flagged = np.bitwise_and(f, exclude_mask) != 0
+            nan_mask = ~np.isfinite(v).all(axis=2)
+            valid = ~flagged & ~nan_mask
+            stats['total_pixels'] += int(v.shape[0] * v.shape[1])
+            stats['flagged_pixels'] += int(flagged.sum())
+            stats['nan_pixels'] += int(nan_mask.sum())
+            # Break down which exclusion flags caused the pixel exclusions.
+            for flag in EXCLUSION_FLAGS:
+                c = int((np.bitwise_and(f, L2_FLAGS[flag]) != 0).sum())
+                if c:
+                    stats['flags'][flag] += c
             if not valid.any():
+                stats['no_valid_pixels'] += 1
                 continue  # no valid pixels: no statistics, no row
 
             v_valid = v[valid, :]  # (n_valid_px, n_wl)
+            stats['valid_pixels'] += int(v_valid.shape[0])
             mean0 = v_valid.mean(axis=0)
             std0 = v_valid.std(axis=0)
             sel = np.all(np.abs(v_valid - mean0) <= SIGMA_CLIP * std0, axis=1)
@@ -266,11 +327,12 @@ def extract_granule_stats(local_path, granule, target_specs,
             for wv, mv in zip(rrs_wavelengths, mean):
                 row[f'{prefix}{int(wv)}'] = mv
             out.append(row)
+            stats['matched'] += 1
     finally:
         ds_nav.close()
         ds_geo.close()
 
-    return out
+    return out, stats
 
 def extract_rrs_wavelengths(file):
     """Extract wavelengths — handles both full hyperspectral (AOP) and
@@ -332,15 +394,20 @@ def extract_pace_matchups(targets, variable_wanted, sat="PACE IOP", time_window_
     def _result():
         return pd.DataFrame(all_rows).drop(columns=['_gid'], errors='ignore')
 
+    stats_path = Path(download_dir) / GRANULE_STATS_NAME
+    stats = _load_stats(stats_path, fingerprint)
+
     if not todo_gids:
-        return _result()
+        print_granule_stats(stats)
+        return _result(), stats
 
     # ---- Phase 2: download only what is missing ----
     gid_to_path = download_granules({g: granule_objs[g] for g in todo_gids},
                                     download_dir, threads=8)
     todo_gids = [g for g in todo_gids if g in gid_to_path]
     if not todo_gids:
-        return _result()
+        print_granule_stats(stats)
+        return _result(), stats
 
     # ---- Phase 3: process local files (no network) ----
     rrs_wavelengths = extract_rrs_wavelengths(gid_to_path[todo_gids[0]])
@@ -348,14 +415,14 @@ def extract_pace_matchups(targets, variable_wanted, sat="PACE IOP", time_window_
     def _job(gid):
         specs = [(idx, targets.loc[idx, 'lat'], targets.loc[idx, 'lon']) for idx in by_granule[gid]]
         try:
-            rows = extract_granule_stats(gid_to_path[gid], granule_objs[gid], specs,
-                                         rrs_wavelengths, variable_wanted)
+            rows, gstats = extract_granule_stats(gid_to_path[gid], granule_objs[gid], specs,
+                                                 rrs_wavelengths, variable_wanted)
         except GranuleOpenError:
             gid_to_path[gid].unlink(missing_ok=True)  # corrupt: re-download next run
             raise
         for r in rows:
             r['_gid'] = gid
-        return rows
+        return rows, gstats
 
     n_error = 0
     ex = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
@@ -364,7 +431,9 @@ def extract_pace_matchups(targets, variable_wanted, sat="PACE IOP", time_window_
         for n_done, fut in enumerate(tqdm(concurrent.futures.as_completed(futures),
                                           total=len(futures), desc="Processing granules"), 1):
             try:
-                all_rows.extend(fut.result())
+                rows, gstats = fut.result()
+                all_rows.extend(rows)
+                _merge_stats(stats, gstats)
                 done.add(futures[fut])  # includes granules that yielded no rows
             except Exception as e:
                 n_error += 1
@@ -372,6 +441,7 @@ def extract_pace_matchups(targets, variable_wanted, sat="PACE IOP", time_window_
                     tqdm.write(f"  process failed for {futures[fut]}: {e}")
             if n_done % checkpoint_every == 0:
                 _save_checkpoint(checkpoint_path, fingerprint, all_rows, done)
+                _save_stats(stats_path, fingerprint, stats)
     except BaseException:
         ex.shutdown(wait=False, cancel_futures=True)
         raise
@@ -379,5 +449,32 @@ def extract_pace_matchups(targets, variable_wanted, sat="PACE IOP", time_window_
         ex.shutdown()
     finally:
         _save_checkpoint(checkpoint_path, fingerprint, all_rows, done)
-    print(f"  done: {len(all_rows)} rows, {n_error} errors")
-    return _result()
+        _save_stats(stats_path, fingerprint, stats)
+    print_granule_stats(stats)
+    return _result(), stats
+
+def _save_stats(stats_path, fingerprint, stats):
+    payload = {k: (dict(v) if k == 'flags' else v) for k, v in stats.items()}
+    _atomic_write(stats_path,
+                  lambda f: json.dump({"fingerprint": fingerprint, "stats": payload}, f))
+
+def _load_stats(stats_path, fingerprint):
+    """Return the accumulated granule stats; empty if missing or stale."""
+    if not stats_path.exists():
+        return _empty_stats()
+    try:
+        with open(stats_path) as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"  ignoring unreadable granule stats ({e})")
+        return _empty_stats()
+    if data.get("fingerprint") != fingerprint:
+        print("  granule stats were made with different targets/parameters; ignoring them")
+        return _empty_stats()
+    stats = _empty_stats()
+    for k, v in data.get("stats", {}).items():
+        if k == "flags":
+            stats['flags'].update(v)
+        else:
+            stats[k] = v
+    return stats

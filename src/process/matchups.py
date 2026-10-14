@@ -33,32 +33,33 @@ def match(sat, targets, cv_max=0.15, min_valid_pixels=10,
 
     # ── Satellite-side filters ──────────────────────────────────────────────
     n0 = len(sat)
+    print(f"Final Matchup-Step: {n0}")
 
     # 1. Minimum valid pixels
     df_sat_f = sat[sat['oci_pixel_valid'] >= min_valid_pixels]
-    print(f"  Min pixels (≥{min_valid_pixels}):      {n0} → {len(df_sat_f)} sat rows")
+    print(f"  Min pixels (≥{min_valid_pixels}):          {n0} → {len(df_sat_f)}")
 
     # 2. CV threshold
     n1 = len(df_sat_f)
     df_sat_f = df_sat_f[df_sat_f['oci_cv'] <= cv_max]
-    print(f"  CV filter (≤{cv_max}):    {n1} → {len(df_sat_f)} sat rows")
+    print(f"  CV filter (≤{cv_max}):         {n1} → {len(df_sat_f)}")
 
     # ── Build records: one row per (satellite row, its target) ─────────────
     records = df_sat_f.merge(targets, left_on='target_idx', right_index=True,
                              how='inner', suffixes=('_sat', ''))
-    print(f"  Records (sat × target):   {len(records)}")
+    print(f"  Records (sat × target):    {len(records)}")
 
     # ── In-Sity Solar Zenith Angle filter ─────────────────────────────────────────
     n1 = len(records)
     records['sza'] = records.apply(compute_sza, axis=1)
     records = records[records['sza'] <= sza_max]
-    print(f"  SZA filter  (≤{sza_max}°): {n1} → {len(records)} target rows")
+    print(f"  SZA filter  (≤{sza_max}°):      {n1} → {len(records)}")
 
     # ── Time filter ────────────────────────────────────────────────────────
     records['time_diff'] = (records['oci_datetime'] - records['datetime']).abs()
     n1 = len(records)
     records = records[records['time_diff'] <= time_window]
-    print(f"  Time filter (≤{time_window_minutes} min): {n1} → {len(records)} records")
+    print(f"  Time filter (≤{time_window_minutes} min):    {n1} → {len(records)}")
 
     # ── Distance filter (geodesic, metres → km) ────────────────────────────
     _, _, dist_m = geod.inv(records['lon'].values, records['lat'].values,
@@ -66,11 +67,11 @@ def match(sat, targets, cv_max=0.15, min_valid_pixels=10,
     records['distance_km'] = dist_m / 1000.0
     n1 = len(records)
     records = records[records['distance_km'] <= max_distance_km]
-    print(f"  Distance filter (≤{max_distance_km} km): {n1} → {len(records)} records")
+    print(f"  Distance filter (≤{max_distance_km} km):   {n1} → {len(records)}")
 
     # ── Replicates: targets matched by more than one satellite row ─────────
     n1 = len(records['target_idx'])
-    print(f"  Unique Targets (no satellite replicates): {n1} → {records['target_idx'].nunique()} records")
+    print(f"  Unique Targets (no satellite replicates): {n1} → {records['target_idx'].nunique()}")
 
     # Keep the closest in time for each target
     records = (records.sort_values('time_diff')

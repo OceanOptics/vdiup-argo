@@ -1,4 +1,3 @@
-
 import pandas as pd
 
 from config import PATH_TO_PROCESSED, PATH_TO_MATCHUPS
@@ -26,13 +25,13 @@ def main(path_to_target_data=PATH_TO_PROCESSED, path_to_satellite_data=PATH_TO_M
     target = target.copy()  # Avoid performance warning due to filtering down the road
     # Download/Load PACE-OCI matchup data
     time_window_minutes = 180
-    sat = extract_pace_matchups(target, sat="PACE IOP", variable_wanted=variable,
-                                max_workers=max_workers, time_window_minutes=time_window_minutes,
-                                download_dir=path_to_satellite_data / 'pace_granule_cache',
-                                clear_cache_first=clear_cache)
+    sat, granule_stats = extract_pace_matchups(target, sat="PACE IOP", variable_wanted=variable,
+                                 max_workers=max_workers, time_window_minutes=time_window_minutes,
+                                 download_dir=path_to_satellite_data / 'pace_granule_cache',
+                                 clear_cache_first=clear_cache)
     # Refine matchups to only those with valid satellite data
     df = match(sat, target, cv_max=0.15, min_valid_pixels=10, time_window_minutes=time_window_minutes, sza_max=75.0)
-    return df
+    return df, granule_stats
 
 
 if __name__ == '__main__':
@@ -51,7 +50,7 @@ if __name__ == '__main__':
                         help='Maximum number of workers for parallel processing (default: None, which uses all available cores)')
     args = parser.parse_args()
 
-    df = main(args.path_to_target_dataset, args.path_to_satellite_data, variable=args.variable,
+    df, granule_stats = main(args.path_to_target_dataset, args.path_to_satellite_data, variable=args.variable,
               clear_cache=args.clear_cache, max_workers=args.max_workers)
 
     df.to_csv(args.path_to_satellite_data / f'PACE_OCI_{args.variable.upper()}.matchups.csv', index=False)
