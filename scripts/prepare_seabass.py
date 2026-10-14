@@ -69,7 +69,7 @@ def fmt_ranges(nums):
     return ', '.join(out)
 
 
-def main(revision, processed, root, dry_run, source=str(PATH_TO_SOURCE)):
+def main(revision, processed, root, dry_run, source=str(PATH_TO_SOURCE), skip_current_month=True):
     submitted_dir = os.path.join(root, revision, 'submitted')
     working_dir = os.path.join(root, revision, 'working')
     anomalies = []
@@ -108,6 +108,12 @@ def main(revision, processed, root, dry_run, source=str(PATH_TO_SOURCE)):
 
     # --- 3. Copy files that contain new profiles
     files_to_copy = sorted(new.file.unique())
+    skipped_current_month = []
+    if skip_current_month:
+        current_month = datetime.now().strftime('%Y-%m')
+        current_month_files = set(new.loc[new.datetime.dt.strftime('%Y-%m') == current_month, 'file'])
+        skipped_current_month = sorted(current_month_files)
+        files_to_copy = [f for f in files_to_copy if f not in current_month_files]
     for f in files_to_copy:
         wmo = os.path.basename(os.path.dirname(f))
         dst_dir = os.path.join(working_dir, wmo)
@@ -122,6 +128,8 @@ def main(revision, processed, root, dry_run, source=str(PATH_TO_SOURCE)):
             anomalies.append(f'[working] {os.path.basename(f)}: {int((~g.new).sum())} profile(s) already submitted '
                              f'+ {int(g.new.sum())} new; file replaces the submitted one (same name)')
     print(f'{"Would copy" if dry_run else "Copied"} {len(files_to_copy)} file(s) to {working_dir}')
+    if skipped_current_month:
+        print(f'Skipped {len(skipped_current_month)} current-month file(s) because they may be incomplete')
 
     # --- 4. Statistics
     pd.set_option('display.width', 200, 'display.max_rows', 1000)
@@ -227,6 +235,8 @@ if __name__ == '__main__':
     p.add_argument('--processed', default=str(PATH_TO_PROCESSED))
     p.add_argument('--source', default=str(PATH_TO_SOURCE))
     p.add_argument('--seabass', default=str(PATH_TO_SEABASS))
-    p.add_argument('-n', '--dry-run', action='store_true', help='do not copy .sb files (reports are still written)')
+    p.add_argument('--dry-run', action='store_true', help='do not copy .sb files (reports are still written)')
+    p.add_argument('--include-current-month', action='store_false', dest='skip_current_month',
+                   help='copy current-month files (may be incomplete)')
     a = p.parse_args()
-    main(a.revision, a.processed, a.seabass, a.dry_run, a.source)
+    main(a.revision, a.processed, a.seabass, a.dry_run, a.source, a.skip_current_month)

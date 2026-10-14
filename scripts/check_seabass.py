@@ -16,7 +16,6 @@ logger.setLevel(logging.DEBUG)
 
 if __name__ == '__main__':
     target_revision = 'R2'
-    # dirname = '/Users/nils/Documents/Lab/Projects/VDIUP/_Floats/submitted/20260622'
     dirname = PATH_TO_SEABASS_SUBMISSION
     fig_dir = PATH_TO_FIGURES / 'seabass.check'
     if not os.path.exists(fig_dir):
@@ -33,7 +32,7 @@ if __name__ == '__main__':
                 logger.debug(error.decode().strip())
     # Run Data Check
     # platforms = {f.split('_')[2] for f in glob.glob('*.sb', root_dir=dirname)}  # all files in same dir
-    platforms = os.listdir(dirname)  # one dir per float
+    platforms = [d.name for d in dirname.iterdir() if d.is_dir()]  # one dir per float
     for p in tqdm(platforms, desc='dcheck'):
         try:
             # fig = make_plot(sorted(glob.glob(os.path.join(dirname, f'*_{p}_*.sb'))))

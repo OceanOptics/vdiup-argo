@@ -32,7 +32,7 @@ from matplotlib import gridspec
 import src.data_io.seabass as sb            # noqa: E402
 from src.process.qc import organelli16_qc
 from src.process.kd_function import fit_klu
-from config import PATH_TO_SOURCE, PATH_TO_PROCESSED, FLOAT_LIST_FILE
+from config import PATH_TO_SOURCE, PATH_TO_PROCESSED, FLOAT_LIST_FILE, SEABASS_REVISION
 
 #%% FUNCTIONS AND PATHS
 if not os.path.exists(PATH_TO_PROCESSED):
@@ -872,7 +872,7 @@ if __name__ == '__main__':
             'platform_id': wmo,
             'instrument_manufacturer': 'TriOS',
             'instrument_model': 'RAMSES',
-            'documents': 'PVST_VDIUP_float_documentation_R2.pdf',
+            'documents': f'PVST_VDIUP_Argo_documentation_{SEABASS_REVISION}.pdf',
             'calibration_files': 'no_cal_files',  # was the cals/ AllCal.txt
             'data_type': 'drifter',
             'data_status': 'preliminary',
