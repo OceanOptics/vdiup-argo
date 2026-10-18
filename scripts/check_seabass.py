@@ -5,9 +5,9 @@ import shutil
 
 from tqdm import tqdm
 
-from config import PATH_TO_SEABASS_SUBMISSION, PATH_TO_FIGURES
-from check.dcheck import make_plot
-from check.fcheck import run_fcheck
+from vdiup_argo.config import PATH_TO_SEABASS_SUBMISSION, PATH_TO_FIGURES
+from vdiup_argo.check.dcheck import make_plot
+from vdiup_argo.check.fcheck import run_fcheck
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.WARNING)

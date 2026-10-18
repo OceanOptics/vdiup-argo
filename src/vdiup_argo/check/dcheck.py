@@ -1,8 +1,8 @@
 import pandas as pd
 from plotly.subplots import make_subplots
 
-import src.data_io.seabass as seabass
-from config import QUALITY
+from vdiup_argo.data_io import seabass
+from vdiup_argo.config import QUALITY
 
 
 QUALITY_COL = {0: "#2CA02C", 1: "#FF7F0E", 2: "#D62728"}

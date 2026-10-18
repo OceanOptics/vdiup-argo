@@ -29,10 +29,10 @@ import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 from matplotlib import gridspec
 
-import src.data_io.seabass as sb            # noqa: E402
-from src.process.qc import organelli16_qc
-from src.process.kd_function import fit_klu
-from config import PATH_TO_SOURCE, PATH_TO_PROCESSED, FLOAT_LIST_FILE, SEABASS_REVISION
+from vdiup_argo.data_io import seabass as sb
+from vdiup_argo.process.qc import organelli16_qc
+from vdiup_argo.process.kd_function import fit_klu
+from vdiup_argo.config import PATH_TO_SOURCE, PATH_TO_PROCESSED, FLOAT_LIST_FILE, SEABASS_REVISION
 
 #%% FUNCTIONS AND PATHS
 if not os.path.exists(PATH_TO_PROCESSED):

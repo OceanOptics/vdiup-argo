@@ -16,8 +16,8 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
-from src.data_io.seabass import read_profiles
-from config import PATH_TO_PROCESSED, PATH_TO_SEABASS, PATH_TO_SOURCE, QUALITY, SEABASS_REVISION
+from vdiup_argo.data_io.seabass import read_profiles
+from vdiup_argo.config import PATH_TO_PROCESSED, PATH_TO_SEABASS, PATH_TO_SOURCE, QUALITY, SEABASS_REVISION
 
 STALE_DAYS = 60          # float flagged if its last processed profile is older
 MAX_CYCLE_GAP = 1        # report missing cycle numbers (gap > this)

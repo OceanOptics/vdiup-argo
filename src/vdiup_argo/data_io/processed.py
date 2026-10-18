@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from config import PATH_TO_PROCESSED, QUALITY
+from vdiup_argo.config import PATH_TO_PROCESSED, QUALITY
 
 PRODUCTS = ('Kd', 'Ed0', 'Ed')
 

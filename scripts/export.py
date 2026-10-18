@@ -5,8 +5,8 @@ import os
 
 import pandas as pd
 
-import src.data_io.seabass as seabass
-from config import PATH_TO_PROCESSED, PATH_TO_MATCHUPS
+from vdiup_argo.data_io import seabass
+from vdiup_argo.config import PATH_TO_PROCESSED, PATH_TO_MATCHUPS
 
 DEFAULT_OUT = PATH_TO_MATCHUPS / 'All_Kd_profiles.csv'
 

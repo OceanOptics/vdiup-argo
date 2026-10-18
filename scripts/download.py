@@ -10,7 +10,7 @@ import requests
 from tqdm import tqdm
 from requests.adapters import HTTPAdapter
 
-from config import PATH_TO_SOURCE, FLOAT_LIST_FILE
+from vdiup_argo.config import PATH_TO_SOURCE, FLOAT_LIST_FILE
 
 BASE = 'https://data-argo.ifremer.fr'
 WORKERS = 16

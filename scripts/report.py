@@ -8,9 +8,9 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import plotly.io as pio
 
-from config import PATH_TO_MATCHUPS, PATH_TO_FIGURES, DOWNLOAD_DATE
-from src.shared.regions import get_region_name
-from src.data_io import processed
+from vdiup_argo.config import PATH_TO_MATCHUPS, PATH_TO_FIGURES, DOWNLOAD_DATE
+from vdiup_argo.shared.regions import get_region_name
+from vdiup_argo.data_io import processed
 
 colors = px.colors.qualitative.D3
 

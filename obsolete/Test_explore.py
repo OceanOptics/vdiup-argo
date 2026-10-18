@@ -5,11 +5,11 @@ import sys
 import numpy as np
 import pandas as pd
 import xarray as xr
-import src.data_io.seabass as sb
+from vdiup_argo.data_io import seabass as sb
 sys.path.append('/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve')
 from obsolete import Toolbox_RAMSES as tools
-from src.process import qc as Organelli_QC_Shapiro
-from src.process import kd_function as Function_KD
+from vdiup_argo.process import qc as Organelli_QC_Shapiro
+from vdiup_argo.process import kd_function as Function_KD
 import matplotlib.gridspec as gridspec
 import subprocess
 root = '/Users/charlotte.begouen/Documents/PVST_Hyperspectral_floats_Herve'

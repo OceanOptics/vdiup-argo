@@ -1,9 +1,9 @@
 import pandas as pd
 
-from config import PATH_TO_PROCESSED, PATH_TO_MATCHUPS
-from src.data_io import processed
-from src.data_io.pace_oci import extract_pace_matchups
-from src.process.matchups import match
+from vdiup_argo.config import PATH_TO_PROCESSED, PATH_TO_MATCHUPS
+from vdiup_argo.data_io import processed
+from vdiup_argo.data_io.pace_oci import extract_pace_matchups
+from vdiup_argo.process.matchups import match
 
 
 def main(path_to_target_data=PATH_TO_PROCESSED, path_to_satellite_data=PATH_TO_MATCHUPS, variable='Kd',

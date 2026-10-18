@@ -1,7 +1,7 @@
 # IHO World Seas shapefile (version 3)
 
 This directory contains the IHO Sea Areas shapefile used by
-`src/shared/regions.py`. If you need to download it again:
+`src/vdiup_argo/shared/regions.py`. If you need to download it again:
 
 1. Open the [Marine Regions downloads page](https://www.marineregions.org/downloads.php)
    and locate **IHO Sea Areas, version 3**. Use the download option on that page

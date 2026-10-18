@@ -13,7 +13,7 @@ import concurrent.futures
 from collections import defaultdict
 from pathlib import Path
 
-from shared.colors import wavelength_to_rgb
+from vdiup_argo.shared.colors import wavelength_to_rgb
 
 PATH_TO_DATA_IN = Path('/Volumes/SD/VDIUP/Argo/CBD/New_Outputs_NotRaw')
 PATH_TO_DATA_OUT = Path('/Volumes/SD/VDIUP/Argo/matchups')
